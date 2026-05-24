@@ -2,6 +2,7 @@ from .base import NoopHighlighter, SyntaxHighlighter, SyntaxRegistry, SyntaxToke
 from .java_highlighter import JavaSyntaxHighlighter
 from .javascript_highlighter import JavaScriptSyntaxHighlighter
 from .json_highlighter import JsonSyntaxHighlighter
+from .markdown_highlighter import MarkdownSyntaxHighlighter
 from .python_highlighter import PythonSyntaxHighlighter
 from .sql_highlighter import SqlSyntaxHighlighter
 from .xml_highlighter import XmlSyntaxHighlighter
@@ -11,6 +12,7 @@ def default_syntax_registry() -> SyntaxRegistry:
     registry = SyntaxRegistry()
     registry.register(JsonSyntaxHighlighter())
     registry.register(XmlSyntaxHighlighter())
+    registry.register(MarkdownSyntaxHighlighter())
     registry.register(JavaSyntaxHighlighter())
     registry.register(PythonSyntaxHighlighter())
     registry.register(JavaScriptSyntaxHighlighter())
@@ -23,6 +25,7 @@ __all__ = [
     "JsonSyntaxHighlighter",
     "JavaSyntaxHighlighter",
     "JavaScriptSyntaxHighlighter",
+    "MarkdownSyntaxHighlighter",
     "NoopHighlighter",
     "PythonSyntaxHighlighter",
     "SqlSyntaxHighlighter",

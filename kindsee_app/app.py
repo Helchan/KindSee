@@ -21,7 +21,7 @@ from .platforms import apply_titlebar_theme, is_macos
 from .syntax import default_syntax_registry
 from .tabs import TabState
 from .theme import DARK, LIGHT, effective_palette
-from .widgets import FastContextMenu, JsonTreeCanvas, LineNumberText, SettingsDialog, StatusBar
+from .widgets import FastContextMenu, JsonTreeCanvas, LineNumberText, MarkdownPreview, SettingsDialog, StatusBar
 
 
 class KindSeeApp:
@@ -84,10 +84,13 @@ class KindSeeApp:
         self.paned = tk.PanedWindow(self.root, orient="horizontal", sashwidth=6, bd=0, showhandle=False)
         self.paned.grid(row=2, column=0, sticky="nsew")
         self.tree_panel = tk.Frame(self.paned, bd=0, highlightthickness=0)
+        self.preview_panel = tk.Frame(self.paned, bd=0, highlightthickness=0)
         self.text_panel = tk.Frame(self.paned, bd=0, highlightthickness=0)
         self.tree = JsonTreeCanvas(self.tree_panel, self.on_tree_select, self.show_tree_menu, self.adjust_tree_font)
+        self.preview = MarkdownPreview(self.preview_panel, self.adjust_tree_font)
         self.editor = LineNumberText(self.text_panel, self.on_text_change, self.on_cursor_move, self.adjust_text_font)
         self.tree.pack(fill="both", expand=True)
+        self.preview.pack(fill="both", expand=True)
         self.editor.pack(fill="both", expand=True)
         self.paned.add(self.tree_panel, minsize=280)
         self.paned.add(self.text_panel, minsize=420)
@@ -219,13 +222,27 @@ class KindSeeApp:
             return
         panes = {str(pane) for pane in self.paned.panes()}
         tree_name = str(self.tree_panel)
+        preview_name = str(self.preview_panel)
         text_name = str(self.text_panel)
+        if mode == "preview":
+            if tree_name in panes:
+                self.paned.forget(self.tree_panel)
+            if text_name in {str(pane) for pane in self.paned.panes()}:
+                self.paned.forget(self.text_panel)
+            if preview_name not in {str(pane) for pane in self.paned.panes()}:
+                self.paned.add(self.preview_panel, minsize=280)
+            self.paned.add(self.text_panel, minsize=420)
+            self.root.after(50, self._initial_sash)
         if mode == "text":
             if tree_name in panes:
                 self.paned.forget(self.tree_panel)
+            if preview_name in {str(pane) for pane in self.paned.panes()}:
+                self.paned.forget(self.preview_panel)
             if text_name not in {str(pane) for pane in self.paned.panes()}:
                 self.paned.add(self.text_panel, minsize=420)
-        else:
+        elif mode != "preview":
+            if preview_name in panes:
+                self.paned.forget(self.preview_panel)
             if tree_name not in panes:
                 if text_name in panes:
                     self.paned.forget(self.text_panel)
@@ -472,6 +489,7 @@ class KindSeeApp:
             self.current_tree = None
             self.position_index = EmptyPositionIndex()
             self.tree.set_tree(None)
+            self.preview.clear()
             self.editor.clear_syntax()
             self.set_status(doc_type.empty_status if self.editor.is_empty() else "", False)
             return
@@ -479,6 +497,10 @@ class KindSeeApp:
         self.current_tree = result.tree
         self.position_index = result.position_index
         self.tree.set_tree(result.tree)
+        if doc_type.view_mode == "preview":
+            self.preview.set_markdown(text)
+        else:
+            self.preview.clear()
         self.apply_syntax_highlighting()
         self.set_status(result.status, result.error)
 
@@ -553,13 +575,16 @@ class KindSeeApp:
         self.tab_bar.configure(bg=p["bg"])
         self.paned.configure(bg=p["border"], sashrelief="flat")
         self.tree_panel.configure(bg=p["panel"])
+        self.preview_panel.configure(bg=p["panel"])
         self.text_panel.configure(bg=p["panel"])
         self.editor.set_palette(p)
         self.tree.set_palette(p)
+        self.preview.set_palette(p)
         self.status.set_palette(p)
         self.editor.set_font_size(self.config.text_font_size)
         self.editor.set_occurrence_ignore_case(self.config.occurrence_ignore_case)
         self.tree.set_font_size(self.config.tree_font_size)
+        self.preview.set_font_size(self.config.tree_font_size)
         self.apply_syntax_highlighting()
         self._apply_toolbar_palette()
         self.refresh_tabs()

@@ -2,7 +2,7 @@
 
 ## 1. 产品定位
 
-KindSee 是一款轻量级文本类文件查看、编辑、格式化和结构浏览工具。当前重点支持 JSON，并扩展支持 TXT 纯文本文件、LOG 日志文件、XML 文件、Java 源码文件、Python 源码文件、JavaScript 源码文件和 SQL 脚本文件。
+KindSee 是一款轻量级文本类文件查看、编辑、格式化和结构浏览工具。当前重点支持 JSON，并扩展支持 TXT 纯文本文件、LOG 日志文件、XML 文件、Markdown 文件、Java 源码文件、Python 源码文件、JavaScript 源码文件和 SQL 脚本文件。
 
 核心目标：
 
@@ -15,11 +15,12 @@ KindSee 是一款轻量级文本类文件查看、编辑、格式化和结构浏
 - 支持 TXT 纯文本文件编辑；TXT 不进行语法渲染，不显示结构树，仅显示单文本编辑窗口。
 - 支持 LOG 日志文件编辑；LOG 不进行语法渲染，不显示结构树，仅显示单文本编辑窗口。
 - 支持 XML 文本编辑、实时语法检查、语法渲染、树形结构查看、节点复制、文本格式化和压缩。
+- 支持 Markdown 文本编辑、源码语法渲染和实时预览；Markdown 使用左右分栏，左侧显示渲染预览，右侧显示 Markdown 源文本。
 - 支持 Java 源码文件编辑、基础语法检查和语法渲染；Java 当前不显示结构树，仅显示单文本编辑窗口。
 - 支持 Python 源码文件编辑、语法检查和语法渲染；Python 当前不显示结构树，仅显示单文本编辑窗口。
 - 支持 JavaScript 源码文件编辑、基础语法检查和语法渲染；JavaScript 当前不显示结构树，仅显示单文本编辑窗口。
 - 支持 SQL 脚本文件编辑、基础语法检查和语法渲染；SQL 当前不显示结构树，仅显示单文本编辑窗口。
-- 支持按文件类型切换视图布局，JSON 和 XML 使用左右分栏，TXT、LOG、Java、Python、JavaScript 和 SQL 使用单文本窗格。
+- 支持按文件类型切换视图布局，JSON 和 XML 使用左右分栏结构树，Markdown 使用左右分栏预览，TXT、LOG、Java、Python、JavaScript 和 SQL 使用单文本窗格。
 - TXT 需要考虑大量内容或大文本性能，不能在每次按键时读取全文、解析全文或重建结构视图。
 - LOG 需要考虑大量内容或大文本性能，不能在每次按键时读取全文、解析全文或重建结构视图。
 - 支持多页签编辑和会话恢复。
@@ -112,7 +113,7 @@ KindSee 是一款轻量级文本类文件查看、编辑、格式化和结构浏
 - `file_path`：文件路径。为空表示未保存到外部文件。
 - `autosave_path`：自动保存文件路径。
 - `dirty`：是否已修改。
-- `document_type`：文档类型 ID，例如 `json`、`text`、`log`、`xml`、`java`、`python`、`javascript`、`sql`。
+- `document_type`：文档类型 ID，例如 `json`、`text`、`log`、`xml`、`markdown`、`java`、`python`、`javascript`、`sql`。
 - `document_type_locked`：文档类型是否由用户手动指定。为 `true` 时不再按内容自动切换类型。
 
 持久化要求：
@@ -235,7 +236,7 @@ KindSee 是一款轻量级文本类文件查看、编辑、格式化和结构浏
 
 页签行为：
 
-- 支持多个文本类文档页签，包括 JSON、TXT、LOG、XML、Java、Python、JavaScript 和 SQL。
+- 支持多个文本类文档页签，包括 JSON、TXT、LOG、XML、Markdown、Java、Python、JavaScript 和 SQL。
 - 首次启动没有历史页签时创建一个“未命名”页签，文档类型默认为 TXT。
 - 新建页签标题为 `未命名<N>`，未指定内容和文件类型时文档类型默认为 TXT。
 - 页签标题已修改时追加 ` *`。
@@ -263,7 +264,7 @@ KindSee 是一款轻量级文本类文件查看、编辑、格式化和结构浏
 - `display_name`：文件对话框显示名称。
 - `default_extension`：默认保存扩展名。
 - `file_dialog_patterns`：文件对话框筛选模式。
-- `view_mode`：视图模式，取值包括 `split`、`text`。
+- `view_mode`：视图模式，取值包括 `split`、`preview`、`text`。
 - `parse_on_change`：是否在文本变化后实时解析。
 - `supports_format`：是否支持格式化。
 - `supports_compact`：是否支持压缩。
@@ -307,6 +308,19 @@ XML 文档类型：
 - `parse_on_change = True`。
 - 支持格式化和压缩。
 - 语法错误时显示行列和错误原因。
+
+Markdown 文档类型：
+
+- `type_id = "markdown"`。
+- `view_mode = "preview"`。
+- 使用左右分栏，左侧为只读渲染预览，右侧为 Markdown 源文本编辑器。
+- `parse_on_change = True`。
+- 支持根据 `.md`、`.markdown`、`.mdown` 扩展名识别文件类型。
+- 支持标题、段落、引用、无序列表、有序列表、任务列表、分隔线、代码块、行内代码、粗体、斜体、链接、图片占位文本和表格的基础预览。
+- 支持 Markdown 源文本语法渲染；预览控件由通用 UI 层负责渲染，文档类型模块不得直接操作 Tk 控件。
+- 对未闭合围栏代码块显示语法错误；其它 Markdown 语法尽量宽容渲染，不因非严格写法阻断编辑。
+- 当前不支持格式化和压缩，对应右键菜单项应禁用。
+- 大文件语法检查和语法渲染需要有字符数上限，超过上限时不做全量检查，避免输入卡顿。
 
 Java 文档类型：
 
@@ -450,6 +464,14 @@ SQL 语法渲染：
 - 对括号、分号、逗号、运算符等符号使用 punctuation 样式。
 - SQL 语法渲染不要求 SQL 语句必须完全合法，输入非法 SQL 时仍应尽量渲染可识别 token。
 
+Markdown 语法渲染：
+
+- 对标题标记、列表标记和粗体内容使用 key 样式。
+- 对行内代码和围栏代码块内容使用 string 样式。
+- 对引用标记、链接、图片、斜体内容和代码块围栏使用 literal 样式。
+- 对分隔线和表格分隔行使用 punctuation 样式。
+- Markdown 语法渲染不要求 Markdown 必须完全合法，输入非法 Markdown 时仍应尽量渲染可识别 token。
+
 ## 7. 文本编辑器
 
 文本编辑区功能：
@@ -505,7 +527,7 @@ SQL 语法渲染：
 - `压缩`
 - 分割线
 - `类型`
-  - 已注册文档类型扩展名列表，例如 `.json`、`.txt`、`.log`、`.xml`、`.java`、`.py`、`.js`、`.sql`
+  - 已注册文档类型扩展名列表，例如 `.json`、`.txt`、`.log`、`.xml`、`.md`、`.java`、`.py`、`.js`、`.sql`
 - 分割线
 - `同步`：开启时显示为选中状态，关闭时不显示选中状态；单文本窗口类型应置灰不可用。
 - 分割线
@@ -705,6 +727,7 @@ SQL 语法渲染：
 - 文本编辑器鼠标光标应由文本控件自身固定配置，不应在 `<Motion>` 这类高频鼠标移动事件中反复 `configure(cursor=...)`；macOS 使用 `ibeam`，Windows 和其它 Tk 平台使用 `xterm`。
 - 窗口初次显示、页签切换、右键菜单弹出或关闭后，可设置一次性光标刷新标记；文本区后续首次进入或移动时只允许执行一次强制刷新，刷新后立即清除标记，避免鼠标移动过程中持续闪烁。
 - TXT、LOG、Java、Python、JavaScript、SQL 等单文本窗口类型不提供可用的同步切换。
+- Markdown 预览分栏不使用结构树路径索引，当前不提供可用的同步切换。
 
 位置索引：
 
