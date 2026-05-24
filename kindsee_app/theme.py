@@ -1,0 +1,72 @@
+from __future__ import annotations
+
+from .platforms import is_dark_mode
+
+LIGHT = {
+    "bg": "#f6f7f8",
+    "panel": "#ffffff",
+    "panel2": "#f0f2f4",
+    "text": "#202428",
+    "muted": "#69727d",
+    "border": "#d8dde3",
+    "accent": "#0a66c2",
+    "error": "#c2410c",
+    "line": "#b9c1cc",
+    "select": "#cfe6ff",
+    "input": "#ffffff",
+    "scroll": "#c2cad3",
+    "scroll_track": "#eef1f4",
+    "hover": "#e7f1fc",
+    "tab_inactive": "#eef1f4",
+    "object": "#ffe3e3",
+    "array": "#fff3c4",
+    "field": "#edf8ee",
+    "syntax_key": "#0a66c2",
+    "syntax_string": "#15803d",
+    "syntax_number": "#b45309",
+    "syntax_literal": "#7c3aed",
+    "syntax_punctuation": "#69727d",
+    "occurrence": "#fff2a8",
+    "occurrence_1": "#dbeafe",
+    "occurrence_2": "#dcfce7",
+    "occurrence_3": "#fef3c7",
+    "occurrence_4": "#fce7f3",
+    "occurrence_5": "#ede9fe",
+}
+
+DARK = {
+    "bg": "#1f2328",
+    "panel": "#272c32",
+    "panel2": "#323841",
+    "text": "#f0f3f6",
+    "muted": "#aab4bf",
+    "border": "#343b44",
+    "accent": "#58a6ff",
+    "error": "#ff9b72",
+    "line": "#6d7783",
+    "select": "#1f4f7a",
+    "input": "#242a31",
+    "scroll": "#59636f",
+    "scroll_track": "#2b3138",
+    "hover": "#334150",
+    "tab_inactive": "#242a31",
+    "object": "#5a3333",
+    "array": "#574b24",
+    "field": "#2f4a35",
+    "syntax_key": "#79c0ff",
+    "syntax_string": "#7ee787",
+    "syntax_number": "#ffa657",
+    "syntax_literal": "#d2a8ff",
+    "syntax_punctuation": "#aab4bf",
+    "occurrence": "#5f5520",
+    "occurrence_1": "#1d4d73",
+    "occurrence_2": "#24543a",
+    "occurrence_3": "#5d4a1f",
+    "occurrence_4": "#5c2b46",
+    "occurrence_5": "#46346d",
+}
+
+
+def effective_palette(theme_name: str) -> tuple[dict, bool]:
+    dark = theme_name == "dark" or (theme_name == "system" and is_dark_mode())
+    return (DARK if dark else LIGHT), dark

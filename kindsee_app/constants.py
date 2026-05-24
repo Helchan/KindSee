@@ -1,0 +1,12 @@
+APP_TITLE = "KindSee"
+LEGACY_APP_TITLE = "JsonView"
+APP_VERSION_TEXT = "当前版本:v1.0.0"
+LATEST_VERSION_TEXT = "获取最新版本"
+BRAND_TEXT = "菜鸟驿站出品"
+LATEST_VERSION_URL = "https://www.cainiaoyizhan.com"
+
+MIN_FONT_SIZE = 8
+MAX_FONT_SIZE = 28
+PARSE_DELAY_MS = 140
+AUTOSAVE_DELAY_MS = 350
+SYNC_DELAY_MS = 90

@@ -1,0 +1,539 @@
+from __future__ import annotations
+
+from tkinter import font
+import tkinter as tk
+
+from ..config import clamp_font_size, default_text_font_size
+from ..platforms import is_macos, text_edit_cursor_name
+from ..syntax import SyntaxToken
+from ..theme import LIGHT
+
+MAX_OCCURRENCE_HIGHLIGHT_CHARS = 500_000
+MAX_OCCURRENCE_TEXT_LENGTH = 200
+MAX_OCCURRENCE_MATCHES = 2_000
+MAX_VISIBLE_OCCURRENCE_MATCHES = 300
+MAX_OCCURRENCE_QUERIES = 6
+CURSOR_REFRESH_FALLBACK = "arrow"
+CONTROL_MASK = 0x0004
+MAC_COMMAND_MASKS = (0x0008, 0x0010)
+OCCURRENCE_MODIFIER_KEYSYMS = {
+    "Control_L",
+    "Control_R",
+    "Command",
+    "Command_L",
+    "Command_R",
+    "Meta_L",
+    "Meta_R",
+    "Super_L",
+    "Super_R",
+}
+
+
+class SlimScrollbar(tk.Canvas):
+    def __init__(self, master, orient: str, command, **kwargs):
+        super().__init__(master, highlightthickness=0, bd=0, **kwargs)
+        self.orient = orient
+        self.command = command
+        self.first = 0.0
+        self.last = 1.0
+        self.palette = LIGHT
+        self.dragging = False
+        self.drag_offset = 0
+        self.configure(width=8 if orient == "vertical" else 1, height=8 if orient == "horizontal" else 1)
+        self.bind("<Button-1>", self._click)
+        self.bind("<B1-Motion>", self._drag)
+        self.bind("<ButtonRelease-1>", lambda _e: setattr(self, "dragging", False))
+        self.bind("<Configure>", lambda _e: self._draw())
+
+    def set_palette(self, palette: dict) -> None:
+        self.palette = palette
+        self.configure(bg=palette["panel"])
+        self._draw()
+
+    def set(self, first, last) -> None:
+        self.first = max(0.0, min(1.0, float(first)))
+        self.last = max(0.0, min(1.0, float(last)))
+        self._draw()
+
+    def _thumb(self) -> tuple[int, int, int, int] | None:
+        if self.last - self.first >= 0.999:
+            return None
+        w, h = max(1, self.winfo_width()), max(1, self.winfo_height())
+        if self.orient == "vertical":
+            size = max(24, int(h * (self.last - self.first)))
+            top = int((h - size) * self.first / max(0.0001, 1 - (self.last - self.first)))
+            return 1, top, w - 1, top + size
+        size = max(24, int(w * (self.last - self.first)))
+        left = int((w - size) * self.first / max(0.0001, 1 - (self.last - self.first)))
+        return left, 1, left + size, h - 1
+
+    def _draw(self) -> None:
+        self.delete("all")
+        self.create_rectangle(0, 0, self.winfo_width(), self.winfo_height(), fill=self.palette["scroll_track"], width=0)
+        thumb = self._thumb()
+        if thumb:
+            self.create_rectangle(*thumb, fill=self.palette["scroll"], width=0)
+
+    def _click(self, event) -> None:
+        thumb = self._thumb()
+        if not thumb:
+            return
+        x1, y1, x2, y2 = thumb
+        if x1 <= event.x <= x2 and y1 <= event.y <= y2:
+            self.dragging = True
+            self.drag_offset = event.y - y1 if self.orient == "vertical" else event.x - x1
+            return
+        size = y2 - y1 if self.orient == "vertical" else x2 - x1
+        total = self.winfo_height() if self.orient == "vertical" else self.winfo_width()
+        pos = event.y if self.orient == "vertical" else event.x
+        frac = (pos - size / 2) / max(1, total - size)
+        self.command("moveto", max(0.0, min(1.0, frac)))
+
+    def _drag(self, event) -> None:
+        if not self.dragging:
+            return
+        thumb = self._thumb()
+        if not thumb:
+            return
+        x1, y1, x2, y2 = thumb
+        size = y2 - y1 if self.orient == "vertical" else x2 - x1
+        total = self.winfo_height() if self.orient == "vertical" else self.winfo_width()
+        pos = (event.y if self.orient == "vertical" else event.x) - self.drag_offset
+        frac = pos / max(1, total - size)
+        self.command("moveto", max(0.0, min(1.0, frac)))
+
+
+class FastContextMenu:
+    active_menu: "FastContextMenu | None" = None
+
+    def __init__(self, master, items: list[tuple], palette: dict, font_obj):
+        if FastContextMenu.active_menu is not None:
+            FastContextMenu.active_menu.destroy()
+        self.master = master
+        self.palette = palette
+        self.font = font_obj
+        self.variables: list[tk.BooleanVar] = []
+        self.menu = tk.Menu(master, tearoff=False)
+        self._configure_menu(self.menu)
+        self._build_menu(self.menu, items)
+        FastContextMenu.active_menu = self
+
+    def popup(self, x: int, y: int) -> None:
+        try:
+            self.menu.tk_popup(x, y)
+        finally:
+            try:
+                self.menu.grab_release()
+            except tk.TclError:
+                pass
+
+    def destroy(self) -> None:
+        try:
+            self.menu.unpost()
+            self.menu.destroy()
+        except tk.TclError:
+            pass
+        if FastContextMenu.active_menu is self:
+            FastContextMenu.active_menu = None
+
+    def _configure_menu(self, menu: tk.Menu) -> None:
+        try:
+            menu.configure(
+                bg=self.palette["panel"],
+                fg=self.palette["text"],
+                activebackground=self.palette["hover"],
+                activeforeground=self.palette["text"],
+                disabledforeground=self.palette["muted"],
+                borderwidth=1,
+                relief="solid",
+                font=self.font,
+            )
+        except tk.TclError:
+            pass
+
+    def _build_menu(self, menu: tk.Menu, items: list[tuple]) -> None:
+        for item in items:
+            label = item[0]
+            if label == "-":
+                menu.add_separator()
+                continue
+            enabled = bool(item[2])
+            state = "normal" if enabled else "disabled"
+            if self._is_submenu(item):
+                submenu = tk.Menu(menu, tearoff=False)
+                self._configure_menu(submenu)
+                self._build_menu(submenu, item[1])
+                menu.add_cascade(label=self._clean_label(label), menu=submenu, state=state)
+                continue
+            _check, text = self._split_check_label(label)
+            if self._uses_check_column(label):
+                variable = tk.BooleanVar(master=self.master, value=bool(_check))
+                self.variables.append(variable)
+                menu.add_checkbutton(label=text, variable=variable, command=item[1], state=state)
+            else:
+                menu.add_command(label=text, command=item[1], state=state)
+
+    def _is_submenu(self, item: tuple) -> bool:
+        return len(item) >= 4 and item[3] == "submenu"
+
+    def _split_check_label(self, label: str) -> tuple[str, str]:
+        if label.startswith("✓ "):
+            return "✓", label[2:]
+        return "", label
+
+    def _clean_label(self, label: str) -> str:
+        _check, text = self._split_check_label(label)
+        return text
+
+    def _uses_check_column(self, label: str) -> bool:
+        _check, text = self._split_check_label(label)
+        return text == "同步" or text.startswith(".")
+
+class LineNumberText(tk.Frame):
+    def __init__(self, master, on_change, on_cursor, on_font_delta):
+        super().__init__(master, bd=0, highlightthickness=0)
+        self.on_change = on_change
+        self.on_cursor = on_cursor
+        self.on_font_delta = on_font_delta
+        self.palette = LIGHT
+        self.occurrence_job = None
+        self.occurrence_queries: list[str] = []
+        self.occurrence_add_query = False
+        self.keep_occurrence_query = False
+        self.pending_occurrence_selection: str | None = None
+        self.occurrence_ignore_case = False
+        self.cursor_refresh_job = None
+        self.cursor_refresh_needed = True
+        self.occurrence_tag_names = tuple(["occurrence_highlight"] + [f"occurrence_highlight_{i}" for i in range(1, MAX_OCCURRENCE_QUERIES)])
+        self.syntax_tag_names = ("syntax_key", "syntax_string", "syntax_number", "syntax_literal", "syntax_punctuation")
+        self.text_cursor = text_edit_cursor_name()
+        family = "Menlo" if is_macos() else "Consolas"
+        self.text_font = font.Font(family=family, size=default_text_font_size())
+        self.line_font = font.Font(family=family, size=default_text_font_size())
+        self.line_canvas = tk.Canvas(self, width=34, highlightthickness=0, bd=0)
+        self.text = tk.Text(
+            self,
+            wrap="none",
+            undo=True,
+            autoseparators=True,
+            maxundo=-1,
+            bd=0,
+            highlightthickness=0,
+            insertwidth=2,
+            cursor=self.text_cursor,
+            font=self.text_font,
+        )
+        self.text.tag_configure("sync_highlight", background=self.palette["select"])
+        self._configure_occurrence_tags()
+        self.vbar = SlimScrollbar(self, "vertical", self.text.yview)
+        self.hbar = SlimScrollbar(self, "horizontal", self.text.xview)
+        self.line_canvas.grid(row=0, column=0, sticky="ns")
+        self.text.grid(row=0, column=1, sticky="nsew")
+        self.vbar.grid(row=0, column=2, sticky="ns")
+        self.hbar.grid(row=1, column=1, sticky="ew")
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(1, weight=1)
+        self.text.configure(yscrollcommand=self._yscroll, xscrollcommand=self.hbar.set)
+        self.text.bind("<<Modified>>", self._modified)
+        self.text.bind("<KeyRelease>", self._key_release)
+        self.text.bind("<ButtonRelease-1>", self._button_release)
+        self.text.bind("<Double-ButtonRelease-1>", self._button_release)
+        self.text.bind("<Enter>", self._refresh_cursor_if_needed)
+        self.text.bind("<Motion>", self._refresh_cursor_if_needed)
+        self.text.bind("<Configure>", lambda _e: self._draw_lines())
+        self.text.bind("<MouseWheel>", self._wheel)
+        self.line_canvas.bind("<MouseWheel>", self._wheel)
+        self.text.bind("<Control-MouseWheel>", self._font_wheel)
+        self.line_canvas.bind("<Control-MouseWheel>", self._font_wheel)
+
+    def set_palette(self, palette: dict) -> None:
+        self.palette = palette
+        self.configure(bg=palette["panel"])
+        self.line_canvas.configure(bg=palette["panel2"])
+        self.text.configure(
+            bg=palette["input"],
+            fg=palette["text"],
+            insertbackground=palette["text"],
+            selectbackground=palette["select"],
+            selectforeground=palette["text"],
+        )
+        self.text.tag_configure("sync_highlight", background=palette["select"])
+        self._configure_occurrence_tags()
+        self._configure_syntax_tags()
+        self.restore_text_cursor()
+        self.vbar.set_palette(palette)
+        self.hbar.set_palette(palette)
+        self._draw_lines()
+
+    def set_font_size(self, size: int) -> None:
+        size = clamp_font_size(size)
+        self.text_font.configure(size=size)
+        self.line_font.configure(size=size)
+        self._update_line_width()
+        self._draw_lines()
+
+    def set_occurrence_ignore_case(self, enabled: bool) -> None:
+        self.occurrence_ignore_case = bool(enabled)
+        if self.occurrence_queries:
+            self.schedule_occurrence_highlight(0, keep_query=True)
+
+    def get(self) -> str:
+        return self.text.get("1.0", "end-1c")
+
+    def is_empty(self) -> bool:
+        return self.text.index("end-1c") == "1.0"
+
+    def set(self, content: str) -> None:
+        self.text.configure(state="normal")
+        self.text.delete("1.0", "end")
+        if content:
+            self.text.insert("1.0", content)
+        self.text.edit_modified(False)
+        self.occurrence_queries = []
+        self.clear_occurrence_highlight()
+        self._update_line_width()
+        self._draw_lines()
+
+    def replace_all(self, content: str) -> None:
+        self.text.delete("1.0", "end")
+        self.text.insert("1.0", content)
+        self.text.edit_modified(True)
+        self.on_change()
+        self._update_line_width()
+        self._draw_lines()
+
+    def _modified(self, _event=None) -> None:
+        if self.text.edit_modified():
+            self.text.edit_modified(False)
+            self._update_line_width()
+            self._draw_lines()
+            self.schedule_occurrence_highlight()
+            self.on_change()
+
+    def _key_release(self, _event=None) -> None:
+        self.on_cursor()
+        if self._is_occurrence_modifier_key(_event):
+            if self.occurrence_queries:
+                self.schedule_occurrence_highlight(keep_query=True)
+            return
+        selected = self._current_selection_text()
+        if selected:
+            self.schedule_occurrence_highlight(selected_text=selected)
+        elif self.occurrence_queries:
+            self.schedule_occurrence_highlight(keep_query=True)
+
+    def _button_release(self, _event=None) -> None:
+        self.on_cursor()
+        add_query = self._is_add_occurrence_event(_event)
+        self.schedule_occurrence_highlight(add_query=add_query, selected_text=self._current_selection_text())
+
+    def _yscroll(self, first, last) -> None:
+        self.vbar.set(first, last)
+        self._draw_lines()
+        if self.occurrence_queries:
+            self.schedule_occurrence_highlight(180, keep_query=True)
+
+    def _wheel(self, event):
+        if event.state & 0x0004:
+            return self._font_wheel(event)
+        units = -1 if event.delta > 0 else 1
+        self.text.yview_scroll(units, "units")
+        return "break"
+
+    def _font_wheel(self, event):
+        self.on_font_delta(1 if event.delta > 0 else -1)
+        return "break"
+
+    def _update_line_width(self) -> None:
+        total = int(self.text.index("end-1c").split(".")[0])
+        digits = max(1, len(str(total)))
+        width = self.line_font.measure("9" * digits) + 16
+        self.line_canvas.configure(width=width)
+
+    def _draw_lines(self) -> None:
+        self.line_canvas.delete("all")
+        self._update_line_width()
+        i = self.text.index("@0,0")
+        width = int(self.line_canvas.cget("width"))
+        while True:
+            dline = self.text.dlineinfo(i)
+            if dline is None:
+                break
+            y = dline[1]
+            line_no = i.split(".")[0]
+            self.line_canvas.create_text(width - 8, y, anchor="ne", text=line_no, fill=self.palette["muted"], font=self.line_font)
+            i = self.text.index(f"{i}+1line")
+
+    def offset_to_index(self, offset: int) -> str:
+        return self.text.index(f"1.0+{max(0, offset)}c")
+
+    def cursor_offset(self) -> int:
+        counted = self.text.count("1.0", "insert", "chars")
+        return int(counted[0]) if counted else 0
+
+    def request_text_cursor_refresh(self) -> None:
+        self.cursor_refresh_needed = True
+        self.restore_text_cursor(force=True)
+
+    def _refresh_cursor_if_needed(self, _event=None) -> None:
+        if not self.cursor_refresh_needed:
+            return
+        self.cursor_refresh_needed = False
+        self.restore_text_cursor(force=True)
+
+    def restore_text_cursor(self, force: bool = False) -> None:
+        if force:
+            if self.cursor_refresh_job:
+                self.after_cancel(self.cursor_refresh_job)
+            self.text.configure(cursor=CURSOR_REFRESH_FALLBACK)
+            self.cursor_refresh_job = self.after_idle(self._apply_text_cursor)
+            return
+        if self.text.cget("cursor") != self.text_cursor:
+            self.text.configure(cursor=self.text_cursor)
+
+    def _apply_text_cursor(self) -> None:
+        self.cursor_refresh_job = None
+        self.text.configure(cursor=self.text_cursor)
+
+    def highlight_span(self, start: int, end: int) -> None:
+        self.text.tag_remove("sync_highlight", "1.0", "end")
+        s = self.offset_to_index(start)
+        e = self.offset_to_index(max(start + 1, end))
+        self.text.tag_configure("sync_highlight", background=self.palette["select"])
+        self.text.tag_add("sync_highlight", s, e)
+        self.text.see(s)
+        self.after(900, lambda: self.text.tag_remove("sync_highlight", "1.0", "end"))
+
+    def highlight_span_and_move_cursor(self, start: int, end: int, cursor_offset: int) -> None:
+        self.highlight_span(start, end)
+        cursor_index = self.offset_to_index(cursor_offset)
+        self.text.mark_set("insert", cursor_index)
+        self.text.see(cursor_index)
+        self.text.focus_set()
+        self.restore_text_cursor()
+
+    def move_cursor_to_offset(self, offset: int) -> None:
+        self.text.tag_remove("sync_highlight", "1.0", "end")
+        cursor_index = self.offset_to_index(offset)
+        self.text.mark_set("insert", cursor_index)
+        self.text.see(cursor_index)
+        self.text.focus_set()
+        self.restore_text_cursor()
+
+    def clear_occurrence_highlight(self) -> None:
+        for tag in self.occurrence_tag_names:
+            self.text.tag_remove(tag, "1.0", "end")
+
+    def _current_selection_text(self) -> str:
+        try:
+            return self.text.get("sel.first", "sel.last")
+        except tk.TclError:
+            return ""
+
+    def _is_add_occurrence_event(self, event) -> bool:
+        if not event:
+            return False
+        state = int(getattr(event, "state", 0))
+        if is_macos():
+            return bool(state & CONTROL_MASK) or any(state & mask for mask in MAC_COMMAND_MASKS)
+        return bool(state & CONTROL_MASK)
+
+    def _is_occurrence_modifier_key(self, event) -> bool:
+        return bool(event and getattr(event, "keysym", "") in OCCURRENCE_MODIFIER_KEYSYMS)
+
+    def schedule_occurrence_highlight(self, delay_ms: int = 120, keep_query: bool = False, add_query: bool = False, selected_text: str | None = None) -> None:
+        if self.occurrence_job:
+            self.after_cancel(self.occurrence_job)
+        self.keep_occurrence_query = keep_query
+        self.occurrence_add_query = add_query
+        self.pending_occurrence_selection = selected_text
+        self.occurrence_job = self.after(delay_ms, self.highlight_selected_occurrences)
+
+    def highlight_selected_occurrences(self) -> None:
+        self.occurrence_job = None
+        self.clear_occurrence_highlight()
+        selected = self.pending_occurrence_selection
+        self.pending_occurrence_selection = None
+        if selected is None and not self.keep_occurrence_query:
+            selected = self._current_selection_text()
+        if not selected:
+            if not self.keep_occurrence_query and not self.occurrence_add_query:
+                self.occurrence_queries = []
+            self.keep_occurrence_query = False
+            self.occurrence_add_query = False
+            if self.occurrence_queries:
+                self._highlight_occurrence_queries()
+            return
+        self.keep_occurrence_query = False
+        if selected:
+            if selected.isspace() or len(selected) > MAX_OCCURRENCE_TEXT_LENGTH:
+                if not self.occurrence_add_query:
+                    self.occurrence_queries = []
+                self.occurrence_add_query = False
+                return
+            if self.occurrence_add_query:
+                if selected not in self.occurrence_queries:
+                    self.occurrence_queries.append(selected)
+                    self.occurrence_queries = self.occurrence_queries[-MAX_OCCURRENCE_QUERIES:]
+            else:
+                self.occurrence_queries = [selected]
+        self.occurrence_add_query = False
+        if not self.occurrence_queries:
+            return
+        self._highlight_occurrence_queries()
+
+    def _highlight_occurrence_queries(self) -> None:
+        try:
+            total_chars = int(self.text.count("1.0", "end-1c", "chars")[0])
+        except Exception:
+            total_chars = MAX_OCCURRENCE_HIGHLIGHT_CHARS + 1
+        for idx, query in enumerate(self.occurrence_queries):
+            tag = self.occurrence_tag_names[idx % len(self.occurrence_tag_names)]
+            if total_chars > MAX_OCCURRENCE_HIGHLIGHT_CHARS:
+                self._highlight_visible_occurrences(query, tag)
+            else:
+                self._highlight_occurrences_between(query, tag, "1.0", "end", MAX_OCCURRENCE_MATCHES)
+        self.text.tag_raise("sel")
+        self.text.tag_raise("sync_highlight")
+
+    def _highlight_visible_occurrences(self, selected: str, tag: str) -> None:
+        start = self.text.index("@0,0")
+        end = self.text.index(f"@0,{max(1, self.text.winfo_height())}")
+        start = self.text.index(f"{start} linestart -2 lines")
+        end = self.text.index(f"{end} lineend +2 lines")
+        self._highlight_occurrences_between(selected, tag, start, end, MAX_VISIBLE_OCCURRENCE_MATCHES)
+
+    def _highlight_occurrences_between(self, selected: str, tag: str, start: str, stop: str, max_matches: int) -> None:
+        pos = start
+        matches = 0
+        while matches < max_matches:
+            pos = self.text.search(selected, pos, stopindex=stop, exact=True, nocase=self.occurrence_ignore_case)
+            if not pos:
+                break
+            end = self.text.index(f"{pos}+{len(selected)}c")
+            self.text.tag_add(tag, pos, end)
+            pos = end
+            matches += 1
+
+    def clear_syntax(self) -> None:
+        for tag in self.syntax_tag_names:
+            self.text.tag_remove(tag, "1.0", "end")
+
+    def apply_syntax_tokens(self, tokens: list[SyntaxToken]) -> None:
+        self.clear_syntax()
+        for token in tokens:
+            tag = f"syntax_{token.kind}"
+            if tag not in self.syntax_tag_names or token.end <= token.start:
+                continue
+            self.text.tag_add(tag, self.offset_to_index(token.start), self.offset_to_index(token.end))
+        self.text.tag_raise("sel")
+        self.text.tag_raise("sync_highlight")
+
+    def _configure_syntax_tags(self) -> None:
+        for tag in self.syntax_tag_names:
+            self.text.tag_configure(tag, foreground=self.palette.get(tag, self.palette["text"]))
+
+    def _configure_occurrence_tags(self) -> None:
+        for idx, tag in enumerate(self.occurrence_tag_names):
+            key = "occurrence" if idx == 0 else f"occurrence_{idx}"
+            self.text.tag_configure(tag, background=self.palette.get(key, self.palette["occurrence"]))
