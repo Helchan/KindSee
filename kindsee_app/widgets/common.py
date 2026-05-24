@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import time
+from pathlib import Path
+from typing import Callable
 from tkinter import font
 import tkinter as tk
 
 from ..config import clamp_font_size, default_text_font_size
+from ..large_text import LARGE_TEXT_CHUNK_CHARS, LARGE_TEXT_TIME_BUDGET_MS, is_large_text_size
 from ..platforms import is_macos, text_edit_cursor_name
 from ..syntax import SyntaxToken
 from ..theme import LIGHT
@@ -204,6 +208,10 @@ class LineNumberText(tk.Frame):
         self.occurrence_ignore_case = False
         self.cursor_refresh_job = None
         self.cursor_refresh_needed = True
+        self.bulk_job = None
+        self.bulk_cancel_token = 0
+        self.bulk_cleanup: Callable[[], None] | None = None
+        self.large_content_mode = False
         self.occurrence_tag_names = tuple(["occurrence_highlight"] + [f"occurrence_highlight_{i}" for i in range(1, MAX_OCCURRENCE_QUERIES)])
         self.syntax_tag_names = ("syntax_key", "syntax_string", "syntax_number", "syntax_literal", "syntax_punctuation")
         self.text_cursor = text_edit_cursor_name()
@@ -280,14 +288,42 @@ class LineNumberText(tk.Frame):
     def get(self) -> str:
         return self.text.get("1.0", "end-1c")
 
+    def char_count(self) -> int:
+        counted = self.text.count("1.0", "end-1c", "chars")
+        return int(counted[0]) if counted else 0
+
+    def content_is_large(self) -> bool:
+        return self.large_content_mode or is_large_text_size(self.char_count())
+
+    def sample_text(self, limit: int) -> str:
+        if limit <= 0:
+            return ""
+        return self.text.get("1.0", f"1.0+{limit}c")
+
+    def selection_char_count(self) -> int:
+        try:
+            counted = self.text.count("sel.first", "sel.last", "chars")
+            return int(counted[0]) if counted else 0
+        except tk.TclError:
+            return 0
+
+    def is_blank_for_detection(self, scan_limit: int = 4096) -> bool:
+        if self.is_empty():
+            return True
+        if self.content_is_large():
+            return False
+        return not self.sample_text(scan_limit).strip() and self.char_count() <= scan_limit
+
     def is_empty(self) -> bool:
         return self.text.index("end-1c") == "1.0"
 
     def set(self, content: str) -> None:
+        self.cancel_bulk_operation()
         self.text.configure(state="normal")
         self.text.delete("1.0", "end")
         if content:
             self.text.insert("1.0", content)
+        self.large_content_mode = is_large_text_size(len(content))
         self.text.edit_modified(False)
         self.occurrence_queries = []
         self.clear_occurrence_highlight()
@@ -295,12 +331,247 @@ class LineNumberText(tk.Frame):
         self._draw_lines()
 
     def replace_all(self, content: str) -> None:
+        self.cancel_bulk_operation()
         self.text.delete("1.0", "end")
         self.text.insert("1.0", content)
+        self.large_content_mode = is_large_text_size(len(content))
         self.text.edit_modified(True)
         self.on_change()
         self._update_line_width()
         self._draw_lines()
+
+    def cancel_bulk_operation(self) -> None:
+        self.bulk_cancel_token += 1
+        if self.bulk_job:
+            try:
+                self.after_cancel(self.bulk_job)
+            except tk.TclError:
+                pass
+            self.bulk_job = None
+        cleanup = self.bulk_cleanup
+        self.bulk_cleanup = None
+        if cleanup:
+            cleanup()
+
+    def _begin_bulk_operation(self) -> int:
+        self.cancel_bulk_operation()
+        self.bulk_cancel_token += 1
+        return self.bulk_cancel_token
+
+    def load_file_chunked(
+        self,
+        path: Path,
+        on_progress: Callable[[int], None] | None = None,
+        on_complete: Callable[[int], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        token = self._begin_bulk_operation()
+        old_undo = self.text.cget("undo")
+        stream = path.open("r", encoding="utf-8", errors="replace", newline="")
+        total_chars = 0
+
+        def cleanup() -> None:
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+        self.bulk_cleanup = cleanup
+        self.text.configure(state="normal", undo=False)
+        self.text.delete("1.0", "end")
+        self.large_content_mode = True
+        self.occurrence_queries = []
+        self.clear_occurrence_highlight()
+        self.clear_syntax()
+
+        def finish() -> None:
+            self.bulk_job = None
+            self.bulk_cleanup = None
+            cleanup()
+            self.text.configure(undo=old_undo)
+            self.text.edit_modified(False)
+            self._update_line_width()
+            self._draw_lines()
+            if on_complete:
+                on_complete(total_chars)
+
+        def fail(exc: Exception) -> None:
+            self.bulk_job = None
+            self.bulk_cleanup = None
+            cleanup()
+            self.text.configure(undo=old_undo)
+            if on_error:
+                on_error(exc)
+
+        def step() -> None:
+            nonlocal total_chars
+            if token != self.bulk_cancel_token:
+                return
+            try:
+                started = time.perf_counter()
+                while (time.perf_counter() - started) * 1000 < LARGE_TEXT_TIME_BUDGET_MS:
+                    chunk = stream.read(LARGE_TEXT_CHUNK_CHARS)
+                    if not chunk:
+                        finish()
+                        return
+                    self.text.insert("end-1c", chunk)
+                    total_chars += len(chunk)
+                    if on_progress:
+                        on_progress(total_chars)
+                self.text.edit_modified(False)
+                self._update_line_width()
+                self._draw_lines()
+                self.bulk_job = self.after(1, step)
+            except Exception as exc:
+                fail(exc)
+
+        self.bulk_job = self.after(1, step)
+
+    def insert_text_chunked(
+        self,
+        content: str,
+        replace_selection: bool = True,
+        on_progress: Callable[[int, int], None] | None = None,
+        on_complete: Callable[[int], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        token = self._begin_bulk_operation()
+        old_undo = self.text.cget("undo")
+        total = len(content)
+        offset = 0
+        self.text.configure(state="normal", undo=False)
+        if replace_selection:
+            try:
+                self.text.delete("sel.first", "sel.last")
+            except tk.TclError:
+                pass
+        self.text.mark_set("_kindsee_bulk_insert", "insert")
+        self.text.mark_gravity("_kindsee_bulk_insert", "right")
+        self.large_content_mode = True
+
+        def cleanup() -> None:
+            try:
+                self.text.mark_unset("_kindsee_bulk_insert")
+            except tk.TclError:
+                pass
+
+        self.bulk_cleanup = cleanup
+
+        def finish() -> None:
+            self.bulk_job = None
+            self.bulk_cleanup = None
+            cleanup()
+            self.text.configure(undo=old_undo)
+            self.text.edit_modified(False)
+            self._update_line_width()
+            self._draw_lines()
+            if on_complete:
+                on_complete(total)
+
+        def fail(exc: Exception) -> None:
+            self.bulk_job = None
+            self.bulk_cleanup = None
+            cleanup()
+            self.text.configure(undo=old_undo)
+            if on_error:
+                on_error(exc)
+
+        def step() -> None:
+            nonlocal offset
+            if token != self.bulk_cancel_token:
+                return
+            try:
+                started = time.perf_counter()
+                while offset < total and (time.perf_counter() - started) * 1000 < LARGE_TEXT_TIME_BUDGET_MS:
+                    next_offset = min(total, offset + LARGE_TEXT_CHUNK_CHARS)
+                    self.text.insert("_kindsee_bulk_insert", content[offset:next_offset])
+                    offset = next_offset
+                    if on_progress:
+                        on_progress(offset, total)
+                self.text.edit_modified(False)
+                self._update_line_width()
+                self._draw_lines()
+                if offset >= total:
+                    finish()
+                    return
+                self.bulk_job = self.after(1, step)
+            except Exception as exc:
+                fail(exc)
+
+        self.bulk_job = self.after(1, step)
+
+    def save_to_path_chunked(
+        self,
+        path: Path,
+        on_progress: Callable[[int, int], None] | None = None,
+        on_complete: Callable[[int], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        token = self._begin_bulk_operation()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_name(f"{path.name}.kindsee.tmp")
+        stream = tmp_path.open("w", encoding="utf-8", newline="")
+        start_index = "1.0"
+        end_index = self.text.index("end-1c")
+        total_chars = self.char_count()
+        written = 0
+
+        def cleanup() -> None:
+            try:
+                stream.close()
+            except Exception:
+                pass
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except Exception:
+                pass
+
+        self.bulk_cleanup = cleanup
+
+        def finish() -> None:
+            self.bulk_job = None
+            self.bulk_cleanup = None
+            try:
+                stream.close()
+                tmp_path.replace(path)
+            except Exception as exc:
+                fail(exc)
+                return
+            if on_complete:
+                on_complete(total_chars)
+
+        def fail(exc: Exception) -> None:
+            self.bulk_job = None
+            self.bulk_cleanup = None
+            cleanup()
+            if on_error:
+                on_error(exc)
+
+        def step() -> None:
+            nonlocal start_index, written
+            if token != self.bulk_cancel_token:
+                return
+            try:
+                started = time.perf_counter()
+                while self.text.compare(start_index, "<", end_index) and (time.perf_counter() - started) * 1000 < LARGE_TEXT_TIME_BUDGET_MS:
+                    next_index = self.text.index(f"{start_index}+{LARGE_TEXT_CHUNK_CHARS}c")
+                    if self.text.compare(next_index, ">", end_index):
+                        next_index = end_index
+                    chunk = self.text.get(start_index, next_index)
+                    stream.write(chunk)
+                    written += len(chunk)
+                    start_index = next_index
+                    if on_progress:
+                        on_progress(written, total_chars)
+                if not self.text.compare(start_index, "<", end_index):
+                    finish()
+                    return
+                self.bulk_job = self.after(1, step)
+            except Exception as exc:
+                fail(exc)
+
+        self.bulk_job = self.after(1, step)
 
     def _modified(self, _event=None) -> None:
         if self.text.edit_modified():
@@ -426,6 +697,9 @@ class LineNumberText(tk.Frame):
 
     def _current_selection_text(self) -> str:
         try:
+            counted = self.text.count("sel.first", "sel.last", "chars")
+            if counted and int(counted[0]) > MAX_OCCURRENCE_TEXT_LENGTH:
+                return ""
             return self.text.get("sel.first", "sel.last")
         except tk.TclError:
             return ""

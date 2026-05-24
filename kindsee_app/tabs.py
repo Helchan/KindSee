@@ -13,3 +13,7 @@ class TabState:
     content: str = ""
     document_type: str = "text"
     document_type_locked: bool = False
+    large_content: bool = False
+    content_loaded: bool = True
+    large_source_path: str = ""
+    content_size: int = 0
