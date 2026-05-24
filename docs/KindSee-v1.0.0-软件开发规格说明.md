@@ -2,12 +2,12 @@
 
 ## 1. 产品定位
 
-KindSee 是一款轻量级文本类文件查看、编辑、格式化和结构浏览工具。当前重点支持 JSON，并扩展支持 TXT 纯文本文件、LOG 日志文件、XML 文件、Java 源码文件、Python 源码文件和 JavaScript 源码文件。
+KindSee 是一款轻量级文本类文件查看、编辑、格式化和结构浏览工具。当前重点支持 JSON，并扩展支持 TXT 纯文本文件、LOG 日志文件、XML 文件、Java 源码文件、Python 源码文件、JavaScript 源码文件和 SQL 脚本文件。
 
 核心目标：
 
 - 使用 Python 3.12 开发。
-- 应用运行时不依赖第三方 Python 包。
+- 应用核心 GUI 仅使用 Python 标准库；如某类文档能力确需第三方运行依赖，必须在依赖文件、规格说明和打包说明中明确声明用途。
 - GUI 使用 Python 标准库 `tkinter` 实现。
 - 支持 Windows 和 macOS。
 - 支持明暗主题。
@@ -18,7 +18,8 @@ KindSee 是一款轻量级文本类文件查看、编辑、格式化和结构浏
 - 支持 Java 源码文件编辑、基础语法检查和语法渲染；Java 当前不显示结构树，仅显示单文本编辑窗口。
 - 支持 Python 源码文件编辑、语法检查和语法渲染；Python 当前不显示结构树，仅显示单文本编辑窗口。
 - 支持 JavaScript 源码文件编辑、基础语法检查和语法渲染；JavaScript 当前不显示结构树，仅显示单文本编辑窗口。
-- 支持按文件类型切换视图布局，JSON 和 XML 使用左右分栏，TXT、LOG、Java、Python 和 JavaScript 使用单文本窗格。
+- 支持 SQL 脚本文件编辑、基础语法检查和语法渲染；SQL 当前不显示结构树，仅显示单文本编辑窗口。
+- 支持按文件类型切换视图布局，JSON 和 XML 使用左右分栏，TXT、LOG、Java、Python、JavaScript 和 SQL 使用单文本窗格。
 - TXT 需要考虑大量内容或大文本性能，不能在每次按键时读取全文、解析全文或重建结构视图。
 - LOG 需要考虑大量内容或大文本性能，不能在每次按键时读取全文、解析全文或重建结构视图。
 - 支持多页签编辑和会话恢复。
@@ -46,9 +47,10 @@ KindSee 是一款轻量级文本类文件查看、编辑、格式化和结构浏
 
 运行依赖：
 
-- 仅使用 Python 标准库。
+- 核心 GUI 使用 Python 标准库。
 - GUI 使用 `tkinter`、`tkinter.ttk`、`tkinter.font`、`tkinter.filedialog`。
 - JSON 解析使用标准库 `json`。
+- SQL 解析和格式化使用第三方运行依赖 `sqlglot`；依赖声明位于 `requirements.txt`，用途仅限 SQL 语法解析、错误检查和 SQL 美化。
 - 配置持久化使用标准库 `json`、`pathlib`、`os`。
 - 主题检测可使用平台标准能力：
   - macOS：调用 `defaults read -g AppleInterfaceStyle`。
@@ -110,7 +112,7 @@ KindSee 是一款轻量级文本类文件查看、编辑、格式化和结构浏
 - `file_path`：文件路径。为空表示未保存到外部文件。
 - `autosave_path`：自动保存文件路径。
 - `dirty`：是否已修改。
-- `document_type`：文档类型 ID，例如 `json`、`text`、`log`、`xml`、`java`、`python`、`javascript`。
+- `document_type`：文档类型 ID，例如 `json`、`text`、`log`、`xml`、`java`、`python`、`javascript`、`sql`。
 - `document_type_locked`：文档类型是否由用户手动指定。为 `true` 时不再按内容自动切换类型。
 
 持久化要求：
@@ -233,7 +235,7 @@ KindSee 是一款轻量级文本类文件查看、编辑、格式化和结构浏
 
 页签行为：
 
-- 支持多个文本类文档页签，包括 JSON、TXT、LOG、XML、Java。
+- 支持多个文本类文档页签，包括 JSON、TXT、LOG、XML、Java、Python、JavaScript 和 SQL。
 - 首次启动没有历史页签时创建一个“未命名”页签，文档类型默认为 TXT。
 - 新建页签标题为 `未命名<N>`，未指定内容和文件类型时文档类型默认为 TXT。
 - 页签标题已修改时追加 ` *`。
@@ -339,6 +341,19 @@ JavaScript 文档类型：
 - 当前不支持格式化和压缩，对应右键菜单项应禁用。
 - 大文件语法检查需要有字符数上限，超过上限时不做全量检查，避免输入卡顿。
 
+SQL 文档类型：
+
+- `type_id = "sql"`。
+- `view_mode = "text"`。
+- 只显示单文本编辑窗口，不显示左侧树视图。
+- `parse_on_change = True`。
+- 优先使用第三方运行依赖 `sqlglot` 进行 SQL 解析校验；未安装依赖时降级到内置基础校验，避免应用无法启动。
+- 依赖可用时，SQL 校验能力应接近 JSON、XML、Python 等解析器驱动的校验模式；但 SQL 存在多方言差异，必须明确当前默认方言。
+- 当前默认 SQL 方言为 `mysql`。
+- 不构建结构树。
+- 支持 SQL 格式化；依赖可用时使用 `sqlglot` 美化，依赖缺失时使用内置基础格式化；当前不支持压缩，对应压缩右键菜单项应禁用。
+- 大文件语法检查需要有字符数上限，超过上限时不做全量检查，避免输入卡顿。
+
 内容自动检测：
 
 - 对未保存到外部文件的页签，应在明确的整段内容进入文本框时根据文本内容自动检测文档类型。
@@ -426,6 +441,15 @@ JavaScript 语法渲染：
 - 对括号、分号、逗号、运算符等符号使用 punctuation 样式。
 - JavaScript 语法渲染不要求 JavaScript 代码必须完全合法，输入非法 JavaScript 时仍应尽量渲染可识别 token。
 
+SQL 语法渲染：
+
+- 对 SQL 关键字使用 key 样式。
+- 对字符串、双引号标识符、反引号标识符和方括号标识符使用 string 样式。
+- 对数字字面量使用 number 样式。
+- 对 `true`、`false`、`null`、行注释和块注释使用 literal 样式。
+- 对括号、分号、逗号、运算符等符号使用 punctuation 样式。
+- SQL 语法渲染不要求 SQL 语句必须完全合法，输入非法 SQL 时仍应尽量渲染可识别 token。
+
 ## 7. 文本编辑器
 
 文本编辑区功能：
@@ -481,7 +505,7 @@ JavaScript 语法渲染：
 - `压缩`
 - 分割线
 - `类型`
-  - 已注册文档类型扩展名列表，例如 `.json`、`.txt`、`.log`、`.xml`、`.java`、`.py`、`.js`
+  - 已注册文档类型扩展名列表，例如 `.json`、`.txt`、`.log`、`.xml`、`.java`、`.py`、`.js`、`.sql`
 - 分割线
 - `同步`：开启时显示为选中状态，关闭时不显示选中状态；单文本窗口类型应置灰不可用。
 - 分割线
@@ -680,7 +704,7 @@ JavaScript 语法渲染：
 - 文本编辑器区域的鼠标光标应始终保持文本编辑光标，不应因右键菜单或同步切换残留为指针光标。
 - 文本编辑器鼠标光标应由文本控件自身固定配置，不应在 `<Motion>` 这类高频鼠标移动事件中反复 `configure(cursor=...)`；macOS 使用 `ibeam`，Windows 和其它 Tk 平台使用 `xterm`。
 - 窗口初次显示、页签切换、右键菜单弹出或关闭后，可设置一次性光标刷新标记；文本区后续首次进入或移动时只允许执行一次强制刷新，刷新后立即清除标记，避免鼠标移动过程中持续闪烁。
-- TXT、LOG、Java、Python、JavaScript 等单文本窗口类型不提供可用的同步切换。
+- TXT、LOG、Java、Python、JavaScript、SQL 等单文本窗口类型不提供可用的同步切换。
 
 位置索引：
 
@@ -759,7 +783,7 @@ JavaScript 语法渲染：
 
 打开文件：
 
-- 支持通过文件对话框打开一个或多个 JSON、TXT、LOG、XML、Java、Python 或 JavaScript 文件。
+- 支持通过文件对话框打开一个或多个 JSON、TXT、LOG、XML、Java、Python、JavaScript 或 SQL 文件。
 - 文件对话框筛选：
   - `JSON 文件 (*.json)`
   - `TXT 文件 (*.txt)`
@@ -768,6 +792,7 @@ JavaScript 语法渲染：
   - `Java 文件 (*.java)`
   - `Python 文件 (*.py *.pyw)`
   - `JavaScript 文件 (*.js *.mjs *.cjs)`
+  - `SQL 文件 (*.sql)`
   - `所有文件 (*.*)`
 - 打开失败时在状态栏显示 `打开失败：<异常信息>`。
 - 打开成功后创建或切换到对应页签。
@@ -779,6 +804,7 @@ JavaScript 语法渲染：
 - 打开 `.java` 文件时使用 Java 文档类型。
 - 打开 `.py`、`.pyw` 文件时使用 Python 文档类型。
 - 打开 `.js`、`.mjs`、`.cjs` 文件时使用 JavaScript 文档类型。
+- 打开 `.sql` 文件时使用 SQL 文档类型。
 - 无法识别扩展名时默认按 JSON 文档类型处理。
 
 保存文件：
@@ -786,7 +812,7 @@ JavaScript 语法渲染：
 - 快捷键保存当前页签。
 - 如果当前页签已有 `file_path`，直接写回原文件。
 - 如果没有 `file_path`，弹出保存文件对话框。
-- 默认扩展名根据当前文档类型决定，JSON 为 `.json`，TXT 为 `.txt`，LOG 为 `.log`，XML 为 `.xml`，Java 为 `.java`，Python 为 `.py`，JavaScript 为 `.js`。
+- 默认扩展名根据当前文档类型决定，JSON 为 `.json`，TXT 为 `.txt`，LOG 为 `.log`，XML 为 `.xml`，Java 为 `.java`，Python 为 `.py`，JavaScript 为 `.js`，SQL 为 `.sql`。
 - 保存失败时在状态栏显示 `保存失败：<异常信息>`。
 - 保存成功后：
   - 页签 `dirty=false`。
@@ -1029,6 +1055,7 @@ Windows：
 - 支持打开 Java 文件。
 - 支持打开 Python 文件。
 - 支持打开 JavaScript 文件。
+- 支持打开 SQL 文件。
 - JSON 页签显示左右分栏。
 - XML 页签显示左右分栏，左侧展示元素、属性和文本节点结构。
 - TXT 页签只显示单文本编辑窗口，不显示结构树。
@@ -1036,11 +1063,13 @@ Windows：
 - Java 页签只显示单文本编辑窗口，不显示结构树。
 - Python 页签只显示单文本编辑窗口，不显示结构树。
 - JavaScript 页签只显示单文本编辑窗口，不显示结构树。
+- SQL 页签只显示单文本编辑窗口，不显示结构树。
 - TXT 页签右键菜单中格式化、压缩不可用。
 - LOG 页签右键菜单中格式化、压缩不可用。
 - Java 页签右键菜单中格式化、压缩不可用。
 - Python 页签右键菜单中格式化、压缩不可用。
 - JavaScript 页签右键菜单中格式化、压缩不可用。
+- SQL 页签右键菜单中格式化可用，压缩不可用。
 - 支持保存当前页签。
 - 应用重启后能恢复未保存页签内容。
 - 已保存文件页签能从文件路径恢复。
@@ -1072,6 +1101,9 @@ Windows：
 - `JavaDocumentType`：Java 文档类型实现。
 - `PythonDocumentType`：Python 文档类型实现。
 - `JavaScriptDocumentType`：JavaScript 文档类型实现。
+- `SqlDocumentType`：SQL 文档类型实现。
+- `SqlGlotSyntaxValidator`：SQL 第三方解析器适配组件，优先使用 `sqlglot`，缺失时降级到基础校验。
+- `BasicSqlSyntaxValidator`：SQL 基础语法校验降级组件。
 - `SyntaxToken`：语法 token 数据结构。
 - `SyntaxHighlighter`：语法渲染策略接口。
 - `SyntaxRegistry`：语法渲染器注册和查找。
@@ -1080,6 +1112,7 @@ Windows：
 - `JavaSyntaxHighlighter`：Java 语法 token 识别。
 - `PythonSyntaxHighlighter`：Python 语法 token 识别。
 - `JavaScriptSyntaxHighlighter`：JavaScript 语法 token 识别。
+- `SqlSyntaxHighlighter`：SQL 语法 token 识别。
 - `NoopHighlighter`：不需要语法渲染的空实现。
 - `FastContextMenu`：Tk 原生 `Menu` 适配层，负责菜单项、二级菜单、置灰、选中标记、主题配置和事件绑定。
 - `SlimScrollbar`：自绘滚动条。

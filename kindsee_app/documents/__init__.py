@@ -14,6 +14,7 @@ from .javascript_document import JavaScriptDocumentType
 from .json_document import JsonDocumentType
 from .log_document import LogDocumentType
 from .python_document import PythonDocumentType
+from .sql_document import SqlDocumentType
 from .text_document import TextDocumentType
 from .xml_document import XmlDocumentType
 
@@ -27,6 +28,7 @@ def default_registry() -> DocumentRegistry:
     registry.register(JavaDocumentType())
     registry.register(PythonDocumentType())
     registry.register(JavaScriptDocumentType())
+    registry.register(SqlDocumentType())
     return registry
 
 
@@ -40,6 +42,7 @@ __all__ = [
     "LogDocumentType",
     "ParseResult",
     "PythonDocumentType",
+    "SqlDocumentType",
     "TextDocumentType",
     "TreeNode",
     "XmlDocumentType",

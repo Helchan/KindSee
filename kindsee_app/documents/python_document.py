@@ -8,7 +8,11 @@ from .base import EmptyPositionIndex, ParseResult, TreeNode
 
 
 MAX_PYTHON_CHECK_CHARS = 500_000
-PYTHON_CONTENT_RE = re.compile(r"\b(?:def|class|import|from|async\s+def)\s+[A-Za-z_][A-Za-z0-9_]*|\bif\s+__name__\s*==\s*['\"]__main__['\"]")
+PYTHON_CONTENT_RE = re.compile(
+    r"\b(?:def|class|import|async\s+def)\s+[A-Za-z_][A-Za-z0-9_]*"
+    r"|\bfrom\s+[A-Za-z_][A-Za-z0-9_.]*\s+import\b"
+    r"|\bif\s+__name__\s*==\s*['\"]__main__['\"]",
+)
 
 
 class PythonDocumentType:
