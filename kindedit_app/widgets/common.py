@@ -20,6 +20,7 @@ MAX_OCCURRENCE_QUERIES = 6
 CURSOR_REFRESH_FALLBACK = "arrow"
 CONTROL_MASK = 0x0004
 ALT_MASK = 0x0008
+OPTION_ALT_MASKS = (0x0008, 0x0010, 0x0020, 0x0040, 0x0080)
 MAC_COMMAND_MASKS = (0x0008, 0x0010)
 OCCURRENCE_MODIFIER_KEYSYMS = {
     "Control_L",
@@ -235,6 +236,8 @@ class LineNumberText(tk.Frame):
         self.column_edit_active = False
         self.column_edit_lines: list[int] = []
         self.column_edit_column = 0
+        self.column_edit_range_end_column = 0
+        self.column_caret_widgets: list[tk.Frame] = []
         self.occurrence_tag_names = tuple(["occurrence_highlight"] + [f"occurrence_highlight_{i}" for i in range(1, MAX_OCCURRENCE_QUERIES)])
         self.syntax_tag_names = ("syntax_key", "syntax_string", "syntax_number", "syntax_literal", "syntax_punctuation")
         self.text_cursor = text_edit_cursor_name()
@@ -265,13 +268,13 @@ class LineNumberText(tk.Frame):
         self.hbar.grid(row=1, column=1, sticky="ew")
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=1)
-        self.text.configure(yscrollcommand=self._yscroll, xscrollcommand=self.hbar.set)
+        self.text.configure(yscrollcommand=self._yscroll, xscrollcommand=self._xscroll)
         self.text.bind("<<Modified>>", self._modified)
         self.text.bind("<KeyRelease>", self._key_release)
         self.text.bind("<ButtonRelease-1>", self._button_release)
         self.text.bind("<Button-1>", self._button_press, add="+")
-        self.text.bind("<Alt-Button-1>", self._column_edit_start)
-        self.text.bind("<Option-Button-1>", self._column_edit_start)
+        for sequence in ("<Alt-Button-1>", "<Option-Button-1>", "<Mod1-Button-1>", "<Mod2-Button-1>"):
+            self.text.bind(sequence, lambda event: self._column_edit_start(event, force=True))
         self.text.bind("<B1-Motion>", self._column_edit_motion, add="+")
         self.text.bind("<ButtonRelease-1>", self._column_edit_release, add="+")
         self.text.bind("<KeyPress>", self._column_edit_key, add="+")
@@ -304,7 +307,7 @@ class LineNumberText(tk.Frame):
             selectforeground=palette["text"],
         )
         self.text.tag_configure("sync_highlight", background=palette["select"])
-        self.text.tag_configure("column_selection", background=palette["occurrence"])
+        self.text.tag_configure("column_selection", background=palette["select"])
         self._configure_occurrence_tags()
         self._configure_syntax_tags()
         self.restore_text_cursor()
@@ -638,40 +641,48 @@ class LineNumberText(tk.Frame):
         self.schedule_occurrence_highlight(add_query=add_query, selected_text=self._current_selection_text())
 
     def _button_press(self, event=None) -> None:
+        if self._is_column_edit_event(event):
+            return self._column_edit_start(event, force=True)
         if not self._is_column_edit_event(event):
             self.clear_column_edit()
+        return None
 
-    def _column_edit_start(self, event):
-        if not self._is_column_edit_event(event):
+    def _column_edit_start(self, event, force: bool = False):
+        if not force and not self._is_column_edit_event(event):
             return None
-        self.column_edit_anchor = self.text.index(f"@{event.x},{event.y}")
+        self.column_edit_anchor = self._column_boundary_index(event.x, event.y)
         self._update_column_edit(self.column_edit_anchor)
         self.text.focus_set()
         return "break"
 
     def _column_edit_motion(self, event):
-        if not self.column_edit_anchor or not self._is_column_edit_event(event):
+        if not self.column_edit_anchor:
             return None
-        self._update_column_edit(self.text.index(f"@{event.x},{event.y}"))
+        self._update_column_edit(self._column_boundary_index(event.x, event.y))
         return "break"
 
     def _column_edit_release(self, event):
         if not self.column_edit_anchor:
             return None
-        if self._is_column_edit_event(event):
-            self._update_column_edit(self.text.index(f"@{event.x},{event.y}"))
-            return "break"
-        return None
+        self._update_column_edit(self._column_boundary_index(event.x, event.y))
+        return "break"
 
     def clear_column_edit(self) -> None:
         self.column_edit_anchor = None
         self.column_edit_active = False
         self.column_edit_lines = []
         self.column_edit_column = 0
+        self.column_edit_range_end_column = 0
         self.text.tag_remove("column_selection", "1.0", "end")
+        self._clear_column_carets()
 
     def _is_column_edit_event(self, event) -> bool:
-        return bool(event and (int(getattr(event, "state", 0)) & ALT_MASK))
+        if not event:
+            return False
+        state = int(getattr(event, "state", 0))
+        if is_macos():
+            return any(state & mask for mask in OPTION_ALT_MASKS)
+        return bool(state & ALT_MASK)
 
     def _update_column_edit(self, target_index: str) -> None:
         if not self.column_edit_anchor:
@@ -682,12 +693,15 @@ class LineNumberText(tk.Frame):
         start_col, end_col = sorted((anchor_col, target_col))
         self.column_edit_lines = list(range(start_line, end_line + 1))
         self.column_edit_column = start_col
+        self.column_edit_range_end_column = end_col
         self.column_edit_active = bool(self.column_edit_lines)
         self.text.tag_remove("column_selection", "1.0", "end")
-        highlight_end_col = max(start_col + 1, end_col)
-        for line_no in self.column_edit_lines:
-            self.text.tag_add("column_selection", f"{line_no}.{start_col}", f"{line_no}.{highlight_end_col}")
+        if end_col != start_col:
+            highlight_end_col = max(start_col + 1, end_col)
+            for line_no in self.column_edit_lines:
+                self.text.tag_add("column_selection", f"{line_no}.{start_col}", f"{line_no}.{highlight_end_col}")
         self.text.mark_set("insert", f"{target_line}.{target_col}")
+        self._draw_column_carets()
 
     def _column_edit_key(self, event):
         if not self.column_edit_active:
@@ -739,10 +753,54 @@ class LineNumberText(tk.Frame):
         self.text.edit_modified(True)
         self._modified()
         self.text.tag_remove("column_selection", "1.0", "end")
-        for line_no in self.column_edit_lines:
-            self.text.tag_add("column_selection", f"{line_no}.{self.column_edit_column}", f"{line_no}.{self.column_edit_column + 1}")
+        self.column_edit_range_end_column = self.column_edit_column
+        self._draw_column_carets()
         if self.column_edit_lines:
             self.text.mark_set("insert", f"{self.column_edit_lines[-1]}.{self.column_edit_column}")
+
+    def _column_boundary_index(self, x: int, y: int) -> str:
+        index = self.text.index(f"@{x},{y}")
+        bbox = self.text.bbox(index)
+        if not bbox:
+            return index
+        char_x, _char_y, char_w, _char_h = bbox
+        if x >= char_x + max(1, char_w) / 2:
+            return self.text.index(f"{index}+1c")
+        return index
+
+    def _clear_column_carets(self) -> None:
+        for caret in self.column_caret_widgets:
+            try:
+                caret.destroy()
+            except tk.TclError:
+                pass
+        self.column_caret_widgets = []
+
+    def _draw_column_carets(self) -> None:
+        self._clear_column_carets()
+        if not self.column_edit_active:
+            return
+        color = self.palette.get("accent", self.palette["text"])
+        for line_no in self.column_edit_lines:
+            geometry = self._column_caret_geometry(line_no, self.column_edit_column)
+            if not geometry:
+                continue
+            x, y, height = geometry
+            caret = tk.Frame(self.text, bg=color, bd=0, highlightthickness=0, width=2, height=height)
+            caret.place(x=x, y=y, width=2, height=height)
+            self.column_caret_widgets.append(caret)
+
+    def _column_caret_geometry(self, line_no: int, column: int) -> tuple[int, int, int] | None:
+        index = f"{line_no}.{column}"
+        bbox = self.text.bbox(index)
+        if bbox:
+            return bbox[0], bbox[1], bbox[3]
+        line_info = self.text.dlineinfo(f"{line_no}.0")
+        if not line_info:
+            return None
+        x, y, _w, height, _baseline = line_info
+        text = self.text.get(f"{line_no}.0", f"{line_no}.{column}")
+        return x + self.text_font.measure(text), y, height
 
     def _padded_column_index(self, line_no: int, column: int) -> str:
         line_length = self._line_length(line_no)
@@ -763,6 +821,10 @@ class LineNumberText(tk.Frame):
         self._draw_lines()
         if self.occurrence_queries:
             self.schedule_occurrence_highlight(180, keep_query=True)
+
+    def _xscroll(self, first, last) -> None:
+        self.hbar.set(first, last)
+        self._draw_column_carets()
 
     def _wheel(self, event):
         if event.state & 0x0004:
@@ -794,6 +856,7 @@ class LineNumberText(tk.Frame):
             line_no = i.split(".")[0]
             self.line_canvas.create_text(width - 8, y, anchor="ne", text=line_no, fill=self.palette["muted"], font=self.line_font)
             i = self.text.index(f"{i}+1line")
+        self._draw_column_carets()
 
     def offset_to_index(self, offset: int) -> str:
         return self.text.index(f"1.0+{max(0, offset)}c")
