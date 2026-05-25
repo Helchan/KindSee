@@ -7,7 +7,7 @@ import tkinter as tk
 from ..config import clamp_font_size, default_tree_font_size
 from ..platforms import is_macos
 from ..theme import LIGHT
-from .common import SlimScrollbar
+from .common import SlimScrollbar, WHEEL_SCROLL_UNITS
 
 
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
@@ -271,7 +271,7 @@ class MarkdownPreview(tk.Frame):
 
     def _wheel(self, event):
         units = -1 if event.delta > 0 else 1
-        self.text.yview_scroll(units, "units")
+        self.text.yview_scroll(units * WHEEL_SCROLL_UNITS, "units")
         return "break"
 
     def _font_wheel(self, event):

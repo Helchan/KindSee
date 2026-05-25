@@ -1,5 +1,5 @@
-APP_TITLE = "KindSee"
-LEGACY_APP_TITLE = "JsonView"
+APP_TITLE = "KindEdit"
+LEGACY_APP_TITLES = ("Kind" "See", "JsonView")
 APP_VERSION_TEXT = "当前版本:v1.0.0"
 LATEST_VERSION_TEXT = "获取最新版本"
 BRAND_TEXT = "菜鸟驿站出品"

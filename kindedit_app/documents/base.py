@@ -142,3 +142,22 @@ class DocumentRegistry:
             filetypes.append((f"{doc_type.display_name} ({pattern})", pattern))
         filetypes.append(("所有文件", "*.*"))
         return filetypes
+
+    def text_filetypes(self) -> list[tuple[str, str]]:
+        patterns = []
+        for doc_type in self._types.values():
+            patterns.extend(doc_type.file_dialog_patterns)
+        combined = " ".join(dict.fromkeys(patterns))
+        return [("所有文本文件", combined), *self.filetypes()]
+
+    def save_filetypes(self, current_type_id: str | None) -> list[tuple[str, str]]:
+        current = self.get(current_type_id)
+        current_pattern = " ".join(current.file_dialog_patterns)
+        filetypes = [(f"{current.display_name} ({current_pattern})", current_pattern)]
+        for doc_type in self._types.values():
+            if doc_type.type_id == current.type_id:
+                continue
+            pattern = " ".join(doc_type.file_dialog_patterns)
+            filetypes.append((f"{doc_type.display_name} ({pattern})", pattern))
+        filetypes.append(("所有文件", "*.*"))
+        return filetypes

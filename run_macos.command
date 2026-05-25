@@ -19,7 +19,7 @@ run_with() {
   fi
   "$py" -c "import sys, tkinter; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)" >> "$LOG_FILE" 2>&1 || return 1
   log "Launching with: $py"
-  "$py" "$SCRIPT_DIR/kindsee.py" >> "$LOG_FILE" 2>&1
+  "$py" "$SCRIPT_DIR/kindedit.py" >> "$LOG_FILE" 2>&1
   return $?
 }
 
@@ -47,5 +47,5 @@ if command -v python3 >/dev/null 2>&1; then
 fi
 
 log "Python 3.12 with tkinter was not found."
-osascript -e 'display alert "KindSee 启动失败" message "未找到可用的 Python 3.12 + tkinter。详情请查看 logs/macos-launch.log。"' >/dev/null 2>&1 || true
+osascript -e 'display alert "KindEdit 启动失败" message "未找到可用的 Python 3.12 + tkinter。详情请查看 logs/macos-launch.log。"' >/dev/null 2>&1 || true
 exit 1

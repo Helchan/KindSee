@@ -1,14 +1,25 @@
 from __future__ import annotations
 
+import platform
 import uuid
 from pathlib import Path
-from tkinter import filedialog, font
+import sys
+from tkinter import filedialog, font, messagebox
 import tkinter as tk
 
+_APP_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
 _ICON_DIR = Path(__file__).parent / "icon"
+_VENDOR_DIR = _APP_ROOT / "vendor"
+if _VENDOR_DIR.exists() and str(_VENDOR_DIR) not in sys.path:
+    sys.path.insert(0, str(_VENDOR_DIR))
+
+try:
+    from tkinterdnd2 import TkinterDnD
+except Exception:
+    TkinterDnD = None
 
 from .config import AppConfig, autosave_dir, clamp_font_size, clear_persistence, load_config, save_config
-from .constants import APP_TITLE, AUTOSAVE_DELAY_MS, PARSE_DELAY_MS, SYNC_DELAY_MS
+from .constants import APP_TITLE, APP_VERSION_TEXT, AUTOSAVE_DELAY_MS, BRAND_TEXT, LATEST_VERSION_TEXT, LATEST_VERSION_URL, PARSE_DELAY_MS, SYNC_DELAY_MS
 from .documents import (
     DocumentType,
     EmptyPositionIndex,
@@ -29,10 +40,14 @@ from .tabs import TabState
 from .theme import DARK, LIGHT, effective_palette
 from .widgets import FastContextMenu, JsonTreeCanvas, LineNumberText, MarkdownPreview, SettingsDialog, StatusBar
 
+TAB_TITLE_FONT_SIZE = 10
+TAB_TITLE_MAX_CHARS = 20
+TAB_TITLE_PREFIX_CHARS = 17
 
-class KindSeeApp:
+
+class KindEditApp:
     def __init__(self):
-        self.root = tk.Tk()
+        self.root = self._create_root()
         self.root.title(APP_TITLE)
         self.root.geometry("1034x680")
         self.root.minsize(880, 560)
@@ -55,11 +70,15 @@ class KindSeeApp:
         self.untitled_counter = 1
         self.menu_font = font.Font(size=10)
         self.toolbar_font = font.Font(size=16)
-        self.tab_font = font.Font(size=13)
+        self.tab_font = font.Font(size=TAB_TITLE_FONT_SIZE)
         self.current_view_mode = "split"
         self.settings_dialog: SettingsDialog | None = None
         self.toolbar_hotspots: list[tuple[int, int, int, int, object]] = []
-        self.tab_hotspots: list[tuple[int, int, int, int, str, str]] = []
+        self.hovered_toolbar_index: int | None = None
+        self.tab_hotspots: list[tuple[int, int, int, int, str, str, str]] = []
+        self.tab_tooltip: tk.Toplevel | None = None
+        self.tab_tooltip_tab_id: str | None = None
+        self.effective_dark = False
         self._build_ui()
         self._load_tabs()
         self.apply_theme()
@@ -70,6 +89,9 @@ class KindSeeApp:
         self.root.after(120, self.editor.request_text_cursor_refresh)
         self.root.after(360, self.editor.request_text_cursor_refresh)
 
+    def _create_root(self):
+        return tk.Tk()
+
     def _center_window(self, w: int, h: int) -> None:
         self.root.update_idletasks()
         x = max(0, (self.root.winfo_screenwidth() - w) // 2)
@@ -79,7 +101,7 @@ class KindSeeApp:
     def _build_ui(self) -> None:
         self.root.grid_rowconfigure(2, weight=1)
         self.root.grid_columnconfigure(0, weight=1)
-        self.toolbar = tk.Canvas(self.root, height=40, bd=0, highlightthickness=0)
+        self.toolbar = tk.Canvas(self.root, height=36, bd=0, highlightthickness=0)
         self.toolbar.grid(row=0, column=0, sticky="ew")
         self._load_toolbar_icons()
         self._build_toolbar()
@@ -88,7 +110,7 @@ class KindSeeApp:
         self.tab_bar.bind("<Configure>", lambda _e: self.draw_tabs())
         self.tab_bar.bind("<Button-1>", self._tab_click)
         self.tab_bar.bind("<Motion>", self._tab_motion)
-        self.tab_bar.bind("<Leave>", lambda _e: self.tab_bar.configure(cursor=""))
+        self.tab_bar.bind("<Leave>", self._tab_leave)
         self.paned = tk.PanedWindow(self.root, orient="horizontal", sashwidth=6, bd=0, showhandle=False)
         self.paned.grid(row=2, column=0, sticky="nsew")
         self.tree_panel = tk.Frame(self.paned, bd=0, highlightthickness=0)
@@ -113,31 +135,45 @@ class KindSeeApp:
         self.toolbar.bind("<Configure>", lambda _e: self.draw_toolbar())
         self.toolbar.bind("<Button-1>", self._toolbar_click)
         self.toolbar.bind("<Motion>", self._toolbar_motion)
-        self.toolbar.bind("<Leave>", lambda _e: self.toolbar.configure(cursor=""))
+        self.toolbar.bind("<Leave>", self._toolbar_leave)
 
     def _load_toolbar_icons(self) -> None:
         """加载工具栏图标并缩放至适当尺寸"""
-        self._icon_open = tk.PhotoImage(file=str(_ICON_DIR / "open.png")).subsample(11)
-        self._icon_save = tk.PhotoImage(file=str(_ICON_DIR / "save.png")).subsample(11)
-        self._icon_settings = tk.PhotoImage(file=str(_ICON_DIR / "setting.png")).subsample(11)
+        self._icon_open = tk.PhotoImage(master=self.root, file=str(_ICON_DIR / "open.png")).subsample(11)
+        self._icon_save = tk.PhotoImage(master=self.root, file=str(_ICON_DIR / "save.png")).subsample(11)
+        self._icon_settings = tk.PhotoImage(master=self.root, file=str(_ICON_DIR / "setting.png")).subsample(11)
+        self._icon_about = tk.PhotoImage(master=self.root, file=str(_ICON_DIR / "about.png")).subsample(11)
 
     def draw_toolbar(self) -> None:
         self.toolbar.delete("all")
-        self.toolbar.configure(bg=self.palette["panel2"])
+        toolbar_bg = self.palette.get("toolbar", self.palette["panel"])
+        self.toolbar.configure(bg=toolbar_bg)
         h = max(1, self.toolbar.winfo_height())
         w = max(1, self.toolbar.winfo_width())
-        self.toolbar.create_rectangle(0, 0, w, h, fill=self.palette["panel2"], width=0)
+        self.toolbar.create_rectangle(0, 0, w, h, fill=toolbar_bg, width=0)
         items = [
             (self._icon_open, self.open_files),
             (self._icon_save, self.save_current_file),
             (self._icon_settings, self.open_settings),
+            (self._icon_about, self.show_about),
         ]
         self.toolbar_hotspots = []
         x = 10
-        for icon_img, command in items:
+        for index, (icon_img, command) in enumerate(items):
             btn_width = 32
+            x1, y1, x2, y2 = x, 3, x + btn_width, h - 3
+            if index == self.hovered_toolbar_index:
+                self.toolbar.create_rectangle(
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    fill=self.palette["hover"],
+                    outline=self.palette["border"],
+                    width=1,
+                )
             self.toolbar.create_image(x + btn_width // 2, h // 2, image=icon_img)
-            self.toolbar_hotspots.append((x, 4, x + btn_width, h - 4, command))
+            self.toolbar_hotspots.append((x1, y1, x2, y2, command))
             x += btn_width + 6
 
     def _toolbar_click(self, event) -> None:
@@ -148,6 +184,20 @@ class KindSeeApp:
 
     def _toolbar_motion(self, event) -> None:
         self.toolbar.configure(cursor="")
+        hovered = None
+        for index, (x1, y1, x2, y2, _command) in enumerate(self.toolbar_hotspots):
+            if x1 <= event.x <= x2 and y1 <= event.y <= y2:
+                hovered = index
+                break
+        if hovered != self.hovered_toolbar_index:
+            self.hovered_toolbar_index = hovered
+            self.draw_toolbar()
+
+    def _toolbar_leave(self, _event) -> None:
+        self.toolbar.configure(cursor="")
+        if self.hovered_toolbar_index is not None:
+            self.hovered_toolbar_index = None
+            self.draw_toolbar()
 
     def _initial_sash(self) -> None:
         try:
@@ -166,15 +216,173 @@ class KindSeeApp:
 
     def _try_tkdnd(self) -> None:
         try:
+            for tkdnd_dir in self._tkdnd_vendor_dirs():
+                self.root.tk.call("lappend", "auto_path", str(tkdnd_dir))
             self.root.tk.call("package", "require", "tkdnd")
-            self.root.tk.call("tkdnd::drop_target", "register", self.root, "DND_Files")
-            self.root.bind("<<Drop>>", self._drop_files)
+            self._register_drop_target(self.root)
+        except Exception:
+            pass
+        if is_macos():
+            self._install_macos_open_document_handler()
+
+    def _tkdnd_vendor_dirs(self) -> list[Path]:
+        base_dirs = [_VENDOR_DIR / "tkinterdnd2" / "tkdnd"]
+        if TkinterDnD is not None:
+            base_dirs.append(Path(TkinterDnD.__file__).resolve().parent / "tkdnd")
+
+        try:
+            tk_version = str(self.root.tk.call("info", "patchlevel"))
+        except Exception:
+            tk_version = ""
+
+        names: list[str] = []
+        machine = platform.machine()
+        system = platform.system()
+        if system == "Darwin" and machine == "arm64":
+            if tk_version.startswith("9."):
+                names.append("osx-arm64-tcl9")
+            names.append("osx-arm64")
+        elif system == "Darwin" and machine == "x86_64":
+            names.append("osx-x64")
+        elif system == "Linux" and machine == "aarch64":
+            names.append("linux-arm64")
+        elif system == "Linux" and machine == "x86_64":
+            names.append("linux-x64")
+        elif system == "Windows" and machine in {"AMD64", "x86_64"}:
+            names.append("win-x64")
+        elif system == "Windows" and machine == "ARM64":
+            names.append("win-arm64")
+        elif system == "Windows":
+            names.append("win-x86")
+
+        dirs: list[Path] = []
+        for base_dir in base_dirs:
+            for name in names:
+                path = base_dir / name
+                if path.exists() and path not in dirs:
+                    dirs.append(path)
+        return dirs
+
+    def _register_drop_target(self, widget) -> None:
+        try:
+            self.root.tk.call("tkdnd::drop_target", "register", widget, "DND_Files")
+            if hasattr(widget, "dnd_bind"):
+                widget.dnd_bind("<<DropEnter>>", self._drop_accept, add="+")
+                widget.dnd_bind("<<DropPosition>>", self._drop_accept, add="+")
+                widget.dnd_bind("<<Drop>>", self._drop_files, add="+")
+            else:
+                command = self.root.register(self._drop_files_data)
+                self.root.tk.call("bind", widget, "<<DropEnter>>", "copy")
+                self.root.tk.call("bind", widget, "<<DropPosition>>", "copy")
+                self.root.tk.call("bind", widget, "<<Drop>>", f"{command} %D")
+        except Exception:
+            pass
+        for child in widget.winfo_children():
+            self._register_drop_target(child)
+
+    def _drop_accept(self, _event=None) -> str:
+        return "copy"
+
+    def _install_macos_open_document_handler(self) -> None:
+        try:
+            self.root.createcommand("kindedit_open_documents", self._open_document_paths)
+            self.root.tk.eval("proc ::tk::mac::OpenDocument {args} {kindedit_open_documents {*}$args}")
         except Exception:
             pass
 
-    def _drop_files(self, event) -> None:
-        files = self.root.tk.splitlist(event.data)
-        self.open_paths([Path(p) for p in files])
+    def _open_document_paths(self, *paths: str) -> None:
+        self._open_dropped_paths([Path(path) for path in paths])
+
+    def _drop_files(self, event) -> str:
+        return self._drop_files_data(getattr(event, "data", ""))
+
+    def _drop_files_data(self, data: str) -> str:
+        paths = self._parse_drop_paths(data)
+        if not paths:
+            self.set_status("拖拽打开失败：未收到文件路径", error=True)
+            return "copy"
+        self._open_dropped_paths(paths)
+        return "copy"
+
+    def _parse_drop_paths(self, data: str) -> list[Path]:
+        if not data:
+            return []
+        try:
+            items = self.root.tk.splitlist(data)
+        except Exception:
+            items = data.splitlines() or [data]
+        paths: list[Path] = []
+        for item in items:
+            text = str(item).strip()
+            if not text:
+                continue
+            if text.startswith("file://"):
+                try:
+                    from urllib.parse import unquote, urlparse
+
+                    parsed = urlparse(text)
+                    text = unquote(parsed.path)
+                except Exception:
+                    text = text[7:]
+            paths.append(Path(text))
+        return paths
+
+    def _open_dropped_paths(self, paths: list[Path]) -> None:
+        text_paths: list[Path] = []
+        skipped = 0
+        for path in paths:
+            if self._is_text_file(path):
+                text_paths.append(path)
+            else:
+                skipped += 1
+        if text_paths:
+            self.open_paths(text_paths)
+        if skipped:
+            self.set_status(f"已跳过 {skipped} 个非文本文件")
+
+    def _is_text_file(self, path: Path) -> bool:
+        try:
+            if not path.is_file():
+                return False
+            with path.open("rb") as stream:
+                sample = stream.read(8192)
+        except OSError:
+            return False
+        return self._decode_text_bytes(sample) is not None
+
+    def _read_text_file(self, path: Path) -> str:
+        data = path.read_bytes()
+        decoded = self._decode_text_bytes(data)
+        if decoded is None:
+            return data.decode("utf-8", errors="replace")
+        return decoded
+
+    def _decode_text_bytes(self, data: bytes) -> str | None:
+        if not data:
+            return ""
+        encodings = ("utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "gb18030")
+        for encoding in encodings:
+            try:
+                text = data.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+            if self._looks_like_text(text):
+                return text
+        return None
+
+    def _looks_like_text(self, text: str) -> bool:
+        if not text:
+            return True
+        allowed = {"\n", "\r", "\t", "\f", "\b"}
+        control_count = 0
+        checked = 0
+        for char in text[:8192]:
+            checked += 1
+            if char in allowed:
+                continue
+            if ord(char) < 32:
+                control_count += 1
+        return checked > 0 and control_count / checked < 0.02
 
     def current_document_type(self) -> DocumentType:
         if not self.active_tab_id:
@@ -433,6 +641,7 @@ class KindSeeApp:
         if not self.tabs:
             content = self.config.legacy_text_content or ""
             self.tabs.append(self._new_tab_state("未命名", content=content))
+        self._sync_untitled_counter()
         active = self.config.active_tab_id if any(t.id == self.config.active_tab_id for t in self.tabs) else self.tabs[0].id
         self.switch_tab(active)
 
@@ -468,7 +677,7 @@ class KindSeeApp:
                 except OSError:
                     pass
             elif source:
-                content = source.read_text(encoding="utf-8")
+                content = self._read_text_file(source)
                 content_loaded = True
                 content_size = len(content)
             return TabState(
@@ -491,12 +700,29 @@ class KindSeeApp:
     def _new_tab_state(self, title: str | None = None, content: str = "", document_type: DocumentType | None = None) -> TabState:
         doc_type = document_type or self.document_registry.get("text")
         if title is None:
-            title = f"未命名{self.untitled_counter}"
-            self.untitled_counter += 1
+            title = self._next_untitled_title()
         tab_id = uuid.uuid4().hex
         auto = autosave_dir() / f"{tab_id}{doc_type.default_extension}"
         large_content = is_large_text_size(len(content))
         return TabState(tab_id, title, "", str(auto), False, "" if large_content else content, doc_type.type_id, False, large_content, not large_content, "", len(content))
+
+    def _sync_untitled_counter(self) -> None:
+        used_numbers = set()
+        for tab in self.tabs:
+            title = tab.title.removesuffix(" *")
+            if title.startswith("未命名") and title[3:].isdigit():
+                used_numbers.add(int(title[3:]))
+        self.untitled_counter = 1
+        while self.untitled_counter in used_numbers:
+            self.untitled_counter += 1
+
+    def _next_untitled_title(self) -> str:
+        used_titles = {tab.title.removesuffix(" *") for tab in self.tabs}
+        while True:
+            title = f"未命名{self.untitled_counter}"
+            self.untitled_counter += 1
+            if title not in used_titles:
+                return title
 
     def current_tab(self) -> TabState:
         return next(t for t in self.tabs if t.id == self.active_tab_id)
@@ -510,6 +736,7 @@ class KindSeeApp:
         self.draw_tabs()
 
     def draw_tabs(self) -> None:
+        self._hide_tab_tooltip()
         self.tab_bar.delete("all")
         self.tab_bar.configure(bg=self.palette["bg"])
         w = max(1, self.tab_bar.winfo_width())
@@ -522,26 +749,32 @@ class KindSeeApp:
         for tab in self.tabs:
             selected = tab.id == self.active_tab_id
             title = tab.title + (" *" if tab.dirty else "")
-            title_w = self.tab_font.measure(title)
+            display_title = self._truncate_tab_title(title)
+            title_w = self.tab_font.measure(display_title)
             tab_w = max(116, min(240, title_w + 48))
             bg = self.palette["panel"] if selected else self.palette["tab_inactive"]
             fg = self.palette["text"] if selected else self.palette["muted"]
             self.tab_bar.create_rectangle(x, y, x + tab_w, y + tab_h, fill=bg, outline="")
-            self.tab_bar.create_text(x + 12, y + tab_h // 2, text=title, anchor="w", fill=fg, font=self.tab_font)
+            self.tab_bar.create_text(x + 12, y + tab_h // 2, text=display_title, anchor="w", fill=fg, font=self.tab_font)
             close_x1 = x + tab_w - 32
             self.tab_bar.create_text(close_x1 + 14, y + tab_h // 2, text="×", anchor="center", fill=self.palette["muted"], font=self.tab_font)
             if selected:
                 self.tab_bar.create_rectangle(x, y + tab_h - 2, x + tab_w, y + tab_h, fill=self.palette["accent"], outline="")
-            self.tab_hotspots.append((x, y, close_x1, y + tab_h, "select", tab.id))
-            self.tab_hotspots.append((close_x1, y, x + tab_w, y + tab_h, "close", tab.id))
+            self.tab_hotspots.append((x, y, close_x1, y + tab_h, "select", tab.id, title))
+            self.tab_hotspots.append((close_x1, y, x + tab_w, y + tab_h, "close", tab.id, title))
             x += tab_w + 6
         add_w = 40
         self.tab_bar.create_rectangle(x, y, x + add_w, y + tab_h, fill=self.palette["panel2"], outline="")
         self.tab_bar.create_text(x + add_w // 2, y + tab_h // 2, text="+", anchor="center", fill=self.palette["accent"], font=self.tab_font)
-        self.tab_hotspots.append((x, y, x + add_w, y + tab_h, "new", ""))
+        self.tab_hotspots.append((x, y, x + add_w, y + tab_h, "new", "", ""))
+
+    def _truncate_tab_title(self, text: str) -> str:
+        if len(text) <= TAB_TITLE_MAX_CHARS:
+            return text
+        return text[:TAB_TITLE_PREFIX_CHARS] + "..."
 
     def _tab_click(self, event) -> None:
-        for x1, y1, x2, y2, action, tab_id in self.tab_hotspots:
+        for x1, y1, x2, y2, action, tab_id, _title in self.tab_hotspots:
             if x1 <= event.x <= x2 and y1 <= event.y <= y2:
                 if action == "select":
                     self.switch_tab(tab_id)
@@ -551,8 +784,113 @@ class KindSeeApp:
                     self.new_tab()
                 return
 
+    def _confirm_discard_or_save_tab(self, tab: TabState) -> bool:
+        if not tab.dirty:
+            return True
+        result = self._ask_unsaved_tab_action(tab)
+        if result == "cancel":
+            return False
+        if result == "discard":
+            tab.dirty = False
+            return True
+        if tab.id != self.active_tab_id:
+            self.switch_tab(tab.id)
+        if tab.id == self.active_tab_id:
+            return self.save_current_file()
+        return False
+
+    def _ask_unsaved_tab_action(self, tab: TabState) -> str:
+        dialog = tk.Toplevel(self.root)
+        dialog.title("未保存的更改")
+        dialog.transient(self.root)
+        dialog.resizable(False, False)
+        dialog.configure(bg=self.palette["panel"])
+        result = {"value": "cancel"}
+
+        def choose(value: str) -> None:
+            result["value"] = value
+            dialog.destroy()
+
+        dialog.protocol("WM_DELETE_WINDOW", lambda: choose("cancel"))
+        tk.Label(
+            dialog,
+            text=f"页签“{tab.title}”有未保存的更改，是否保存？",
+            bg=self.palette["panel"],
+            fg=self.palette["text"],
+            font=self.menu_font,
+            padx=18,
+            pady=16,
+        ).pack(fill="x")
+        buttons = tk.Frame(dialog, bg=self.palette["panel"])
+        buttons.pack(fill="x", padx=18, pady=(0, 16))
+        for label, value in (("保存", "save"), ("不保存", "discard"), ("取消", "cancel")):
+            button = tk.Button(buttons, text=label, width=8, command=lambda v=value: choose(v))
+            button.pack(side="right", padx=(8, 0))
+        dialog.update_idletasks()
+        x = self.root.winfo_rootx() + max(0, (self.root.winfo_width() - dialog.winfo_width()) // 2)
+        y = self.root.winfo_rooty() + max(0, (self.root.winfo_height() - dialog.winfo_height()) // 2)
+        dialog.geometry(f"+{x}+{y}")
+        dialog.grab_set()
+        dialog.focus_force()
+        self.root.wait_window(dialog)
+        return result["value"]
+
+    def _confirm_all_dirty_tabs(self) -> bool:
+        for tab in list(self.tabs):
+            if tab.dirty and not self._confirm_discard_or_save_tab(tab):
+                return False
+        return True
+
     def _tab_motion(self, event) -> None:
         self.tab_bar.configure(cursor="")
+        hovered = None
+        for x1, y1, x2, y2, action, tab_id, title in self.tab_hotspots:
+            if action != "select":
+                continue
+            if x1 <= event.x <= x2 and y1 <= event.y <= y2:
+                hovered = (tab_id, title)
+                break
+        if hovered:
+            tab_id, title = hovered
+            self._show_tab_tooltip(tab_id, title, event.x_root + 12, event.y_root + 18)
+        else:
+            self._hide_tab_tooltip()
+
+    def _tab_leave(self, _event=None) -> None:
+        self.tab_bar.configure(cursor="")
+        self._hide_tab_tooltip()
+
+    def _show_tab_tooltip(self, tab_id: str, title: str, x: int, y: int) -> None:
+        if self.tab_tooltip is not None and self.tab_tooltip.winfo_exists() and self.tab_tooltip_tab_id == tab_id:
+            self.tab_tooltip.geometry(f"+{x}+{y}")
+            return
+        self._hide_tab_tooltip()
+        tooltip = tk.Toplevel(self.root)
+        tooltip.wm_overrideredirect(True)
+        tooltip.configure(bg=self.palette["border"])
+        label = tk.Label(
+            tooltip,
+            text=title,
+            bg=self.palette["panel"],
+            fg=self.palette["text"],
+            bd=0,
+            padx=8,
+            pady=4,
+            font=self.menu_font,
+        )
+        label.pack()
+        tooltip.geometry(f"+{x}+{y}")
+        self.tab_tooltip = tooltip
+        self.tab_tooltip_tab_id = tab_id
+
+    def _hide_tab_tooltip(self) -> None:
+        if self.tab_tooltip is not None:
+            try:
+                self.tab_tooltip.destroy()
+            except tk.TclError:
+                pass
+        self.tab_tooltip = None
+        self.tab_tooltip_tab_id = None
 
     def switch_tab(self, tab_id: str) -> None:
         if self.saving_large_text:
@@ -635,6 +973,8 @@ class KindSeeApp:
             self.refresh_tabs()
             return
         closing = next(t for t in self.tabs if t.id == tab_id)
+        if not self._confirm_discard_or_save_tab(closing):
+            return
         if closing.id == self.active_tab_id and self._needs_large_snapshot_before_leave(closing):
             self._snapshot_active_large_tab(lambda target=tab_id: self.close_tab(target))
             return
@@ -826,6 +1166,13 @@ class KindSeeApp:
             return
         self.settings_dialog = SettingsDialog(self)
 
+    def show_about(self) -> None:
+        messagebox.showinfo(
+            "关于",
+            f"{APP_VERSION_TEXT}\n{LATEST_VERSION_TEXT}: {LATEST_VERSION_URL}\n{BRAND_TEXT}",
+            parent=self.root,
+        )
+
     def set_occurrence_ignore_case(self, enabled: bool) -> None:
         self.config.occurrence_ignore_case = bool(enabled)
         self.editor.set_occurrence_ignore_case(self.config.occurrence_ignore_case)
@@ -840,9 +1187,10 @@ class KindSeeApp:
 
     def apply_theme(self) -> None:
         self.palette, effective_dark = effective_palette(self.config.theme)
+        self.effective_dark = effective_dark
         p = self.palette
         self.root.configure(bg=p["bg"])
-        self.toolbar.configure(bg=p["panel2"])
+        self.toolbar.configure(bg=p.get("toolbar", p["panel"]))
         self.tab_bar.configure(bg=p["bg"])
         self.paned.configure(bg=p["border"], sashrelief="flat")
         self.tree_panel.configure(bg=p["panel"])
@@ -853,6 +1201,7 @@ class KindSeeApp:
         self.preview.set_palette(p)
         self.status.set_palette(p)
         self.editor.set_font_size(self.config.text_font_size)
+        self._sync_tab_font()
         self.editor.set_occurrence_ignore_case(self.config.occurrence_ignore_case)
         self.tree.set_font_size(self.config.tree_font_size)
         self.preview.set_font_size(self.config.tree_font_size)
@@ -860,12 +1209,15 @@ class KindSeeApp:
         self._apply_toolbar_palette()
         self.refresh_tabs()
         if self.settings_dialog is not None and self.settings_dialog.winfo_exists():
-            self.settings_dialog.apply_palette(p)
+            self.settings_dialog.apply_palette(p, effective_dark)
         apply_titlebar_theme(self.root, effective_dark)
 
     def _apply_toolbar_palette(self) -> None:
         self.draw_toolbar()
         self.draw_tabs()
+
+    def _sync_tab_font(self) -> None:
+        self.tab_font.configure(size=TAB_TITLE_FONT_SIZE)
 
     def toggle_theme(self) -> None:
         current_dark = self.palette is DARK
@@ -904,6 +1256,8 @@ class KindSeeApp:
     def adjust_text_font(self, delta: int) -> None:
         self.config.text_font_size = clamp_font_size(self.config.text_font_size + delta)
         self.editor.set_font_size(self.config.text_font_size)
+        self._sync_tab_font()
+        self.refresh_tabs()
         self.save_session()
 
     def adjust_tree_font(self, delta: int) -> None:
@@ -1076,7 +1430,7 @@ class KindSeeApp:
     def open_files(self) -> None:
         paths = filedialog.askopenfilenames(
             title="打开文件",
-            filetypes=self.document_registry.filetypes(),
+            filetypes=self.document_registry.text_filetypes(),
         )
         self.open_paths([Path(p) for p in paths])
 
@@ -1100,7 +1454,7 @@ class KindSeeApp:
                     except OSError:
                         tab.content_size = 0
                 else:
-                    content = file_path.read_text(encoding="utf-8")
+                    content = self._read_text_file(file_path)
                     tab = self._new_tab_state(file_path.name, content, doc_type)
                 tab.file_path = resolved
                 tab.dirty = False
@@ -1110,7 +1464,9 @@ class KindSeeApp:
             except Exception as exc:
                 self.set_status(f"打开失败：{exc}", error=True)
 
-    def save_current_file(self) -> None:
+    def save_current_file(self) -> bool:
+        if not self.active_tab_id:
+            return False
         tab = self.current_tab()
         doc_type = self.current_document_type()
         path = tab.file_path
@@ -1118,15 +1474,15 @@ class KindSeeApp:
             selected = filedialog.asksaveasfilename(
                 title="保存文件",
                 defaultextension=doc_type.default_extension,
-                filetypes=self.document_registry.filetypes(),
+                filetypes=self.document_registry.save_filetypes(doc_type.type_id),
             )
             if not selected:
-                return
-            path = selected
+                return False
+            path = str(self._path_with_default_extension(Path(selected), doc_type))
         try:
             if self.active_tab_is_large():
                 self._save_large_current_file(Path(path))
-                return
+                return False
             content = self.editor.get()
             Path(path).write_text(content, encoding="utf-8")
             saved_path = Path(path).resolve()
@@ -1146,8 +1502,10 @@ class KindSeeApp:
             self.update_title()
             self.save_session()
             self.set_status("已保存")
+            return True
         except Exception as exc:
             self.set_status(f"保存失败：{exc}", error=True)
+            return False
 
     def _save_large_current_file(self, path: Path) -> None:
         if self.saving_large_text:
@@ -1189,7 +1547,14 @@ class KindSeeApp:
 
         self.editor.save_to_path_chunked(path, on_progress=on_progress, on_complete=on_complete, on_error=on_error)
 
+    def _path_with_default_extension(self, path: Path, doc_type: DocumentType) -> Path:
+        if path.suffix:
+            return path
+        return path.with_suffix(doc_type.default_extension)
+
     def close(self) -> None:
+        if not self._confirm_all_dirty_tabs():
+            return
         tab = self.active_tab_or_none()
         if tab and self._needs_large_snapshot_before_leave(tab):
             self._snapshot_active_large_tab(self._finish_close)

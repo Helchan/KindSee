@@ -7,7 +7,7 @@ from ..config import clamp_font_size, default_tree_font_size
 from ..documents.base import TreeNode, refresh_to_root, refresh_tree_states
 from ..platforms import is_macos
 from ..theme import LIGHT
-from .common import SlimScrollbar
+from .common import SlimScrollbar, WHEEL_SCROLL_UNITS
 
 
 class JsonTreeCanvas(tk.Frame):
@@ -97,11 +97,15 @@ class JsonTreeCanvas(tk.Frame):
             icon_box = (icon_x, icon_y1, icon_x + icon_w, icon_y1 + icon_h)
             icon_boxes[id(node)] = icon_box
             geometries.append((idx, node, x, y, icon_pair, icon_gap, icon_w, icon_x, icon_box))
+            if node.has_children:
+                self.toggle_boxes[idx] = (x, y + 7, x + 14, y + 21)
         max_text_width = width
         for idx, node, x, y, icon_pair, icon_gap, icon_w, icon_x, icon_box in geometries:
             self.row_boxes[idx] = (0, y, width, y + self.row_h)
             if node is self.selected:
                 self.canvas.create_rectangle(0, y, width, y + self.row_h, fill=self.palette["select"], width=0)
+
+        for idx, node, x, y, icon_pair, icon_gap, icon_w, icon_x, icon_box in geometries:
             if node.parent is not None:
                 parent_box = icon_boxes.get(id(node.parent))
                 if parent_box:
@@ -109,11 +113,12 @@ class JsonTreeCanvas(tk.Frame):
                     parent_bottom_y = parent_box[3]
                     child_mid_y = y + self.row_h // 2
                     child_line_end_x = max(parent_mid_x, icon_x - 6)
-                    self.canvas.create_line(parent_mid_x, parent_bottom_y, parent_mid_x, child_mid_y, fill=self.palette["line"], dash=(2, 3))
+                    self._draw_vertical_connector(parent_mid_x, parent_bottom_y, child_mid_y, self.toggle_boxes.values())
                     self.canvas.create_line(parent_mid_x, child_mid_y, child_line_end_x, child_mid_y, fill=self.palette["line"], dash=(2, 3))
+
+        for idx, node, x, y, icon_pair, icon_gap, icon_w, icon_x, icon_box in geometries:
             if node.has_children:
-                box = (x, y + 7, x + 14, y + 21)
-                self.toggle_boxes[idx] = box
+                box = self.toggle_boxes[idx]
                 self.canvas.create_rectangle(*box, outline=self.palette["line"], fill=self.palette["panel2"])
                 self.canvas.create_line(x + 3, y + 14, x + 11, y + 14, fill=self.palette["text"])
                 if not node.expanded:
@@ -126,6 +131,29 @@ class JsonTreeCanvas(tk.Frame):
             max_text_width = max(max_text_width, text_x + self.tree_font.measure(node.display_text) + 24)
         height = max(self.canvas.winfo_height(), len(self.visible) * self.row_h)
         self.canvas.configure(scrollregion=(0, 0, max_text_width, height))
+
+    def _draw_vertical_connector(self, x: int, y1: int, y2: int, toggle_boxes) -> None:
+        if y2 <= y1:
+            return
+        segments = [(y1, y2)]
+        for box in toggle_boxes:
+            bx1, by1, bx2, by2 = box
+            if not (bx1 - 4 <= x <= bx2 + 4):
+                continue
+            next_segments = []
+            cut1, cut2 = by1 - 1, by2 + 1
+            for start, end in segments:
+                if cut2 <= start or cut1 >= end:
+                    next_segments.append((start, end))
+                    continue
+                if start < cut1:
+                    next_segments.append((start, cut1))
+                if cut2 < end:
+                    next_segments.append((cut2, end))
+            segments = next_segments
+        for start, end in segments:
+            if end - start >= 2:
+                self.canvas.create_line(x, start, x, end, fill=self.palette["line"], dash=(2, 3))
 
     def _icon_pair_width(self, pair: tuple[str, str], gap: int) -> int:
         slot_w = max(self.tree_font.measure(pair[0]), self.tree_font.measure(pair[1]))
@@ -183,11 +211,11 @@ class JsonTreeCanvas(tk.Frame):
     def _wheel(self, event):
         units = -1 if event.delta > 0 else 1
         if event.state & 0x0001:
-            self.canvas.xview_scroll(units, "units")
+            self.canvas.xview_scroll(units * WHEEL_SCROLL_UNITS, "units")
         elif event.state & 0x0004:
             return self._font_wheel(event)
         else:
-            self.canvas.yview_scroll(units, "units")
+            self.canvas.yview_scroll(units * WHEEL_SCROLL_UNITS, "units")
         return "break"
 
     def _font_wheel(self, event):

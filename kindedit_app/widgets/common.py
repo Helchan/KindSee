@@ -19,6 +19,7 @@ MAX_VISIBLE_OCCURRENCE_MATCHES = 300
 MAX_OCCURRENCE_QUERIES = 6
 CURSOR_REFRESH_FALLBACK = "arrow"
 CONTROL_MASK = 0x0004
+ALT_MASK = 0x0008
 MAC_COMMAND_MASKS = (0x0008, 0x0010)
 OCCURRENCE_MODIFIER_KEYSYMS = {
     "Control_L",
@@ -31,6 +32,7 @@ OCCURRENCE_MODIFIER_KEYSYMS = {
     "Super_L",
     "Super_R",
 }
+WHEEL_SCROLL_UNITS = 6
 
 
 class SlimScrollbar(tk.Canvas):
@@ -120,6 +122,7 @@ class FastContextMenu:
         self.menu = tk.Menu(master, tearoff=False)
         self._configure_menu(self.menu)
         self._build_menu(self.menu, items)
+        self._bind_disabled_hover_guard(self.menu)
         FastContextMenu.active_menu = self
 
     def popup(self, x: int, y: int) -> None:
@@ -152,6 +155,7 @@ class FastContextMenu:
                 relief="solid",
                 font=self.font,
             )
+            menu.configure(disabledforeground=self.palette.get("disabled", self.palette["muted"]))
         except tk.TclError:
             pass
 
@@ -167,6 +171,7 @@ class FastContextMenu:
                 submenu = tk.Menu(menu, tearoff=False)
                 self._configure_menu(submenu)
                 self._build_menu(submenu, item[1])
+                self._bind_disabled_hover_guard(submenu)
                 menu.add_cascade(label=self._clean_label(label), menu=submenu, state=state)
                 continue
             _check, text = self._split_check_label(label)
@@ -176,6 +181,19 @@ class FastContextMenu:
                 menu.add_checkbutton(label=text, variable=variable, command=item[1], state=state)
             else:
                 menu.add_command(label=text, command=item[1], state=state)
+
+    def _bind_disabled_hover_guard(self, menu: tk.Menu) -> None:
+        menu.bind("<Motion>", lambda event, target=menu: self._clear_disabled_active(target, event), add="+")
+
+    def _clear_disabled_active(self, menu: tk.Menu, event) -> None:
+        try:
+            index = menu.index(f"@{event.x},{event.y}")
+            if index is None:
+                return
+            if str(menu.entrycget(index, "state")) == "disabled":
+                menu.activate("none")
+        except tk.TclError:
+            pass
 
     def _is_submenu(self, item: tuple) -> bool:
         return len(item) >= 4 and item[3] == "submenu"
@@ -206,12 +224,17 @@ class LineNumberText(tk.Frame):
         self.keep_occurrence_query = False
         self.pending_occurrence_selection: str | None = None
         self.occurrence_ignore_case = False
+        self.occurrence_modifier_down = False
         self.cursor_refresh_job = None
         self.cursor_refresh_needed = True
         self.bulk_job = None
         self.bulk_cancel_token = 0
         self.bulk_cleanup: Callable[[], None] | None = None
         self.large_content_mode = False
+        self.column_edit_anchor: str | None = None
+        self.column_edit_active = False
+        self.column_edit_lines: list[int] = []
+        self.column_edit_column = 0
         self.occurrence_tag_names = tuple(["occurrence_highlight"] + [f"occurrence_highlight_{i}" for i in range(1, MAX_OCCURRENCE_QUERIES)])
         self.syntax_tag_names = ("syntax_key", "syntax_string", "syntax_number", "syntax_literal", "syntax_punctuation")
         self.text_cursor = text_edit_cursor_name()
@@ -232,6 +255,7 @@ class LineNumberText(tk.Frame):
             font=self.text_font,
         )
         self.text.tag_configure("sync_highlight", background=self.palette["select"])
+        self.text.tag_configure("column_selection", background=self.palette["occurrence"])
         self._configure_occurrence_tags()
         self.vbar = SlimScrollbar(self, "vertical", self.text.yview)
         self.hbar = SlimScrollbar(self, "horizontal", self.text.xview)
@@ -245,7 +269,21 @@ class LineNumberText(tk.Frame):
         self.text.bind("<<Modified>>", self._modified)
         self.text.bind("<KeyRelease>", self._key_release)
         self.text.bind("<ButtonRelease-1>", self._button_release)
+        self.text.bind("<Button-1>", self._button_press, add="+")
+        self.text.bind("<Alt-Button-1>", self._column_edit_start)
+        self.text.bind("<Option-Button-1>", self._column_edit_start)
+        self.text.bind("<B1-Motion>", self._column_edit_motion, add="+")
+        self.text.bind("<ButtonRelease-1>", self._column_edit_release, add="+")
+        self.text.bind("<KeyPress>", self._column_edit_key, add="+")
         self.text.bind("<Double-ButtonRelease-1>", self._button_release)
+        self.text.bind("<Control-ButtonRelease-1>", self._button_release)
+        self.text.bind("<Control-Double-ButtonRelease-1>", self._button_release)
+        self.text.bind("<Control-KeyPress>", self._modifier_key_press, add="+")
+        self.text.bind("<Control-KeyRelease>", self._modifier_key_release, add="+")
+        self.text.bind("<KeyPress-Control_L>", self._modifier_key_press, add="+")
+        self.text.bind("<KeyPress-Control_R>", self._modifier_key_press, add="+")
+        self.text.bind("<KeyRelease-Control_L>", self._modifier_key_release, add="+")
+        self.text.bind("<KeyRelease-Control_R>", self._modifier_key_release, add="+")
         self.text.bind("<Enter>", self._refresh_cursor_if_needed)
         self.text.bind("<Motion>", self._refresh_cursor_if_needed)
         self.text.bind("<Configure>", lambda _e: self._draw_lines())
@@ -266,6 +304,7 @@ class LineNumberText(tk.Frame):
             selectforeground=palette["text"],
         )
         self.text.tag_configure("sync_highlight", background=palette["select"])
+        self.text.tag_configure("column_selection", background=palette["occurrence"])
         self._configure_occurrence_tags()
         self._configure_syntax_tags()
         self.restore_text_cursor()
@@ -445,13 +484,13 @@ class LineNumberText(tk.Frame):
                 self.text.delete("sel.first", "sel.last")
             except tk.TclError:
                 pass
-        self.text.mark_set("_kindsee_bulk_insert", "insert")
-        self.text.mark_gravity("_kindsee_bulk_insert", "right")
+        self.text.mark_set("_kindedit_bulk_insert", "insert")
+        self.text.mark_gravity("_kindedit_bulk_insert", "right")
         self.large_content_mode = True
 
         def cleanup() -> None:
             try:
-                self.text.mark_unset("_kindsee_bulk_insert")
+                self.text.mark_unset("_kindedit_bulk_insert")
             except tk.TclError:
                 pass
 
@@ -484,7 +523,7 @@ class LineNumberText(tk.Frame):
                 started = time.perf_counter()
                 while offset < total and (time.perf_counter() - started) * 1000 < LARGE_TEXT_TIME_BUDGET_MS:
                     next_offset = min(total, offset + LARGE_TEXT_CHUNK_CHARS)
-                    self.text.insert("_kindsee_bulk_insert", content[offset:next_offset])
+                    self.text.insert("_kindedit_bulk_insert", content[offset:next_offset])
                     offset = next_offset
                     if on_progress:
                         on_progress(offset, total)
@@ -509,7 +548,7 @@ class LineNumberText(tk.Frame):
     ) -> None:
         token = self._begin_bulk_operation()
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = path.with_name(f"{path.name}.kindsee.tmp")
+        tmp_path = path.with_name(f"{path.name}.kindedit.tmp")
         stream = tmp_path.open("w", encoding="utf-8", newline="")
         start_index = "1.0"
         end_index = self.text.index("end-1c")
@@ -598,6 +637,127 @@ class LineNumberText(tk.Frame):
         add_query = self._is_add_occurrence_event(_event)
         self.schedule_occurrence_highlight(add_query=add_query, selected_text=self._current_selection_text())
 
+    def _button_press(self, event=None) -> None:
+        if not self._is_column_edit_event(event):
+            self.clear_column_edit()
+
+    def _column_edit_start(self, event):
+        if not self._is_column_edit_event(event):
+            return None
+        self.column_edit_anchor = self.text.index(f"@{event.x},{event.y}")
+        self._update_column_edit(self.column_edit_anchor)
+        self.text.focus_set()
+        return "break"
+
+    def _column_edit_motion(self, event):
+        if not self.column_edit_anchor or not self._is_column_edit_event(event):
+            return None
+        self._update_column_edit(self.text.index(f"@{event.x},{event.y}"))
+        return "break"
+
+    def _column_edit_release(self, event):
+        if not self.column_edit_anchor:
+            return None
+        if self._is_column_edit_event(event):
+            self._update_column_edit(self.text.index(f"@{event.x},{event.y}"))
+            return "break"
+        return None
+
+    def clear_column_edit(self) -> None:
+        self.column_edit_anchor = None
+        self.column_edit_active = False
+        self.column_edit_lines = []
+        self.column_edit_column = 0
+        self.text.tag_remove("column_selection", "1.0", "end")
+
+    def _is_column_edit_event(self, event) -> bool:
+        return bool(event and (int(getattr(event, "state", 0)) & ALT_MASK))
+
+    def _update_column_edit(self, target_index: str) -> None:
+        if not self.column_edit_anchor:
+            return
+        anchor_line, anchor_col = self._split_index(self.column_edit_anchor)
+        target_line, target_col = self._split_index(target_index)
+        start_line, end_line = sorted((anchor_line, target_line))
+        start_col, end_col = sorted((anchor_col, target_col))
+        self.column_edit_lines = list(range(start_line, end_line + 1))
+        self.column_edit_column = start_col
+        self.column_edit_active = bool(self.column_edit_lines)
+        self.text.tag_remove("column_selection", "1.0", "end")
+        highlight_end_col = max(start_col + 1, end_col)
+        for line_no in self.column_edit_lines:
+            self.text.tag_add("column_selection", f"{line_no}.{start_col}", f"{line_no}.{highlight_end_col}")
+        self.text.mark_set("insert", f"{target_line}.{target_col}")
+
+    def _column_edit_key(self, event):
+        if not self.column_edit_active:
+            return None
+        keysym = getattr(event, "keysym", "")
+        char = getattr(event, "char", "")
+        if keysym == "Escape":
+            self.clear_column_edit()
+            return "break"
+        if keysym == "BackSpace":
+            self._column_edit_backspace()
+            return "break"
+        if keysym == "Delete":
+            self._column_edit_delete()
+            return "break"
+        if keysym in {"Return", "KP_Enter", "Tab"}:
+            text = "\n" if keysym in {"Return", "KP_Enter"} else "\t"
+            self._column_edit_insert(text)
+            return "break"
+        if char and char >= " ":
+            self._column_edit_insert(char)
+            return "break"
+        return None
+
+    def _column_edit_insert(self, value: str) -> None:
+        for line_no in reversed(self.column_edit_lines):
+            index = self._padded_column_index(line_no, self.column_edit_column)
+            self.text.insert(index, value)
+        self.column_edit_column += len(value)
+        self._refresh_column_edit_after_edit()
+
+    def _column_edit_backspace(self) -> None:
+        if self.column_edit_column <= 0:
+            return
+        target_col = self.column_edit_column - 1
+        for line_no in reversed(self.column_edit_lines):
+            if self._line_length(line_no) >= self.column_edit_column:
+                self.text.delete(f"{line_no}.{target_col}", f"{line_no}.{self.column_edit_column}")
+        self.column_edit_column = target_col
+        self._refresh_column_edit_after_edit()
+
+    def _column_edit_delete(self) -> None:
+        for line_no in reversed(self.column_edit_lines):
+            if self._line_length(line_no) > self.column_edit_column:
+                self.text.delete(f"{line_no}.{self.column_edit_column}", f"{line_no}.{self.column_edit_column + 1}")
+        self._refresh_column_edit_after_edit()
+
+    def _refresh_column_edit_after_edit(self) -> None:
+        self.text.edit_modified(True)
+        self._modified()
+        self.text.tag_remove("column_selection", "1.0", "end")
+        for line_no in self.column_edit_lines:
+            self.text.tag_add("column_selection", f"{line_no}.{self.column_edit_column}", f"{line_no}.{self.column_edit_column + 1}")
+        if self.column_edit_lines:
+            self.text.mark_set("insert", f"{self.column_edit_lines[-1]}.{self.column_edit_column}")
+
+    def _padded_column_index(self, line_no: int, column: int) -> str:
+        line_length = self._line_length(line_no)
+        if line_length < column:
+            self.text.insert(f"{line_no}.end", " " * (column - line_length))
+        return f"{line_no}.{column}"
+
+    def _line_length(self, line_no: int) -> int:
+        counted = self.text.count(f"{line_no}.0", f"{line_no}.end", "chars")
+        return int(counted[0]) if counted else 0
+
+    def _split_index(self, index: str) -> tuple[int, int]:
+        line, col = self.text.index(index).split(".")
+        return int(line), int(col)
+
     def _yscroll(self, first, last) -> None:
         self.vbar.set(first, last)
         self._draw_lines()
@@ -608,7 +768,7 @@ class LineNumberText(tk.Frame):
         if event.state & 0x0004:
             return self._font_wheel(event)
         units = -1 if event.delta > 0 else 1
-        self.text.yview_scroll(units, "units")
+        self.text.yview_scroll(units * WHEEL_SCROLL_UNITS, "units")
         return "break"
 
     def _font_wheel(self, event):
@@ -706,14 +866,22 @@ class LineNumberText(tk.Frame):
 
     def _is_add_occurrence_event(self, event) -> bool:
         if not event:
-            return False
+            return self.occurrence_modifier_down
         state = int(getattr(event, "state", 0))
         if is_macos():
-            return bool(state & CONTROL_MASK) or any(state & mask for mask in MAC_COMMAND_MASKS)
-        return bool(state & CONTROL_MASK)
+            return self.occurrence_modifier_down or bool(state & CONTROL_MASK) or any(state & mask for mask in MAC_COMMAND_MASKS)
+        return self.occurrence_modifier_down or bool(state & CONTROL_MASK)
 
     def _is_occurrence_modifier_key(self, event) -> bool:
         return bool(event and getattr(event, "keysym", "") in OCCURRENCE_MODIFIER_KEYSYMS)
+
+    def _modifier_key_press(self, event=None) -> None:
+        if self._is_occurrence_modifier_key(event):
+            self.occurrence_modifier_down = True
+
+    def _modifier_key_release(self, event=None) -> None:
+        if self._is_occurrence_modifier_key(event):
+            self.occurrence_modifier_down = False
 
     def schedule_occurrence_highlight(self, delay_ms: int = 120, keep_query: bool = False, add_query: bool = False, selected_text: str | None = None) -> None:
         if self.occurrence_job:

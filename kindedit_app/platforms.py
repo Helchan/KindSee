@@ -50,6 +50,16 @@ def apply_titlebar_theme(root, dark: bool) -> None:
             value = ctypes.c_int(1 if dark else 0)
             ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(value), ctypes.sizeof(value))
         elif is_macos():
-            root.tk.call("tk::unsupported::MacWindowStyle", "style", root, "document", "none")
+            root.update_idletasks()
+            window = str(root)
+            appearance = "darkaqua" if dark else "aqua"
+            for command in (
+                ("tk::unsupported::MacWindowStyle", "style", window, "document", "none"),
+                ("tk::unsupported::MacWindowStyle", "appearance", window, appearance),
+            ):
+                try:
+                    root.tk.call(*command)
+                except Exception:
+                    pass
     except Exception:
         pass

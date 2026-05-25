@@ -6,7 +6,7 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .constants import APP_TITLE, LEGACY_APP_TITLE, MAX_FONT_SIZE, MIN_FONT_SIZE
+from .constants import APP_TITLE, LEGACY_APP_TITLES, MAX_FONT_SIZE, MIN_FONT_SIZE
 from .platforms import is_macos, is_windows
 
 
@@ -15,11 +15,11 @@ def clamp_font_size(value: int) -> int:
 
 
 def default_tree_font_size() -> int:
-    return 13 if is_macos() else 10
+    return 10
 
 
 def default_text_font_size() -> int:
-    return 11 if is_macos() else 9
+    return 10
 
 
 def _app_config_dir(app_title: str) -> Path:
@@ -36,8 +36,8 @@ def config_dir() -> Path:
     return _app_config_dir(APP_TITLE)
 
 
-def legacy_config_dir() -> Path:
-    return _app_config_dir(LEGACY_APP_TITLE)
+def legacy_config_dirs() -> list[Path]:
+    return [_app_config_dir(title) for title in LEGACY_APP_TITLES]
 
 
 def settings_path() -> Path:
@@ -45,7 +45,11 @@ def settings_path() -> Path:
 
 
 def legacy_settings_path() -> Path:
-    return legacy_config_dir() / "settings.json"
+    for legacy_dir in legacy_config_dirs():
+        path = legacy_dir / "settings.json"
+        if path.exists():
+            return path
+    return legacy_config_dirs()[0] / "settings.json"
 
 
 def autosave_dir() -> Path:
@@ -76,6 +80,13 @@ def load_config() -> AppConfig:
     cfg = AppConfig()
     cfg.tree_font_size = clamp_font_size(data.get("tree_font_size", cfg.tree_font_size))
     cfg.text_font_size = clamp_font_size(data.get("text_font_size", cfg.text_font_size))
+    if is_macos():
+        if cfg.tree_font_size == 13:
+            cfg.tree_font_size = default_tree_font_size()
+        if cfg.text_font_size == 11:
+            cfg.text_font_size = default_text_font_size()
+    elif is_windows() and cfg.text_font_size == 9:
+        cfg.text_font_size = default_text_font_size()
     cfg.theme = data.get("theme") if data.get("theme") in {"system", "light", "dark"} else "system"
     cfg.sync_display = bool(data.get("sync_display", True))
     cfg.occurrence_ignore_case = bool(data.get("occurrence_ignore_case", False))
@@ -119,8 +130,9 @@ def clear_persistence() -> None:
     except Exception:
         pass
     try:
-        legacy_autosave = legacy_config_dir() / "tabs"
-        if legacy_autosave.exists():
-            shutil.rmtree(legacy_autosave)
+        for legacy_dir in legacy_config_dirs():
+            legacy_autosave = legacy_dir / "tabs"
+            if legacy_autosave.exists():
+                shutil.rmtree(legacy_autosave)
     except Exception:
         pass
