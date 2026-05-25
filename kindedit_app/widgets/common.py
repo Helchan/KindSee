@@ -245,6 +245,7 @@ class LineNumberText(tk.Frame):
         self.text_font = font.Font(family=family, size=default_text_font_size())
         self.line_font = font.Font(family=family, size=default_text_font_size())
         self.line_canvas = tk.Canvas(self, width=34, highlightthickness=0, bd=0)
+        self.scroll_corner = tk.Frame(self, bd=0, highlightthickness=0)
         self.text = tk.Text(
             self,
             wrap="none",
@@ -265,6 +266,7 @@ class LineNumberText(tk.Frame):
         self.line_canvas.grid(row=0, column=0, sticky="ns")
         self.text.grid(row=0, column=1, sticky="nsew")
         self.vbar.grid(row=0, column=2, sticky="ns")
+        self.scroll_corner.grid(row=1, column=0, sticky="nsew")
         self.hbar.grid(row=1, column=1, sticky="ew")
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=1)
@@ -299,6 +301,7 @@ class LineNumberText(tk.Frame):
         self.palette = palette
         self.configure(bg=palette["panel"])
         self.line_canvas.configure(bg=palette["panel2"])
+        self.scroll_corner.configure(bg=palette["scroll_track"])
         self.text.configure(
             bg=palette["input"],
             fg=palette["text"],
