@@ -16,3 +16,6 @@ logs/
 build/
 dist/
 *.spec
+
+# 第三方依赖
+vendor/
