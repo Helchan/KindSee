@@ -929,20 +929,26 @@ class KindEditApp:
             return [tab.id for tab in self.tabs[:index]]
         return [tab.id for tab in self.tabs[index + 1 :]]
 
-    def _confirm_discard_or_save_tab(self, tab: TabState) -> bool:
+    def _confirm_discard_or_save_tab(self, tab: TabState, discard_all: bool = False) -> tuple[bool, bool]:
         if not tab.dirty:
-            return True
+            return True, discard_all
+        if discard_all:
+            tab.dirty = False
+            return True, True
         result = self._ask_unsaved_tab_action(tab)
         if result == "cancel":
-            return False
+            return False, discard_all
+        if result == "discard_all":
+            tab.dirty = False
+            return True, True
         if result == "discard":
             tab.dirty = False
-            return True
+            return True, discard_all
         if tab.id != self.active_tab_id:
             self.switch_tab(tab.id)
         if tab.id == self.active_tab_id:
-            return self.save_current_file()
-        return False
+            return self.save_current_file(), discard_all
+        return False, discard_all
 
     def _ask_unsaved_tab_action(self, tab: TabState) -> str:
         dialog = tk.Toplevel(self.root)
@@ -968,9 +974,9 @@ class KindEditApp:
         ).pack(fill="x")
         buttons = tk.Frame(dialog, bg=self.palette["panel"])
         buttons.pack(fill="x", padx=18, pady=(0, 16))
-        for label, value in (("保存", "save"), ("不保存", "discard"), ("取消", "cancel")):
+        for label, value in (("是", "save"), ("否", "discard"), ("全否", "discard_all"), ("取消", "cancel")):
             button = tk.Button(buttons, text=label, width=8, command=lambda v=value: choose(v))
-            button.pack(side="right", padx=(8, 0))
+            button.pack(side="left", padx=(0, 8))
         dialog.update_idletasks()
         x = self.root.winfo_rootx() + max(0, (self.root.winfo_width() - dialog.winfo_width()) // 2)
         y = self.root.winfo_rooty() + max(0, (self.root.winfo_height() - dialog.winfo_height()) // 2)
@@ -981,8 +987,12 @@ class KindEditApp:
         return result["value"]
 
     def _confirm_all_dirty_tabs(self) -> bool:
+        discard_all = False
         for tab in list(self.tabs):
-            if tab.dirty and not self._confirm_discard_or_save_tab(tab):
+            if not tab.dirty:
+                continue
+            confirmed, discard_all = self._confirm_discard_or_save_tab(tab, discard_all)
+            if not confirmed:
                 return False
         return True
 
@@ -1124,7 +1134,8 @@ class KindEditApp:
             self.refresh_tabs()
             return True
         closing = next(t for t in self.tabs if t.id == tab_id)
-        if not self._confirm_discard_or_save_tab(closing):
+        confirmed, _discard_all = self._confirm_discard_or_save_tab(closing)
+        if not confirmed:
             return False
         if closing.id == self.active_tab_id and self._needs_large_snapshot_before_leave(closing):
             self._snapshot_active_large_tab(lambda target=tab_id: self.close_tab(target))
