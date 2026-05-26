@@ -1005,9 +1005,15 @@ class KindEditApp:
             font=self.menu_font,
         )
         label.pack()
+        self._bind_tab_tooltip_context(tooltip, tab_id)
+        self._bind_tab_tooltip_context(label, tab_id)
         tooltip.geometry(f"+{x}+{y}")
         self.tab_tooltip = tooltip
         self.tab_tooltip_tab_id = tab_id
+
+    def _bind_tab_tooltip_context(self, widget: tk.Misc, tab_id: str) -> None:
+        for sequence in ("<ButtonRelease-2>", "<ButtonRelease-3>", "<Control-ButtonRelease-1>"):
+            widget.bind(sequence, lambda event, target=tab_id: self._tab_context_release(event, target))
 
     def _hide_tab_tooltip(self) -> None:
         if self.tab_tooltip is not None:
