@@ -634,6 +634,8 @@ class LineNumberText(tk.Frame):
     def _key_release(self, _event=None) -> None:
         self.on_cursor()
         if self._is_occurrence_modifier_key(_event):
+            if self.occurrence_add_query and self.pending_occurrence_selection:
+                return
             if self.occurrence_queries:
                 self.schedule_occurrence_highlight(keep_query=True)
             return
@@ -648,7 +650,7 @@ class LineNumberText(tk.Frame):
         if self.column_edit_anchor:
             return
         add_query = self._is_add_occurrence_event(_event)
-        self.after_idle(lambda: self.schedule_occurrence_highlight(add_query=add_query, selected_text=self._current_selection_text()))
+        self.after_idle(lambda: self.schedule_occurrence_highlight(0, add_query=add_query, selected_text=self._current_selection_text()))
 
     def _button_press(self, event=None) -> None:
         self.clear_column_edit()
