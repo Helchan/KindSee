@@ -109,6 +109,8 @@ class KindEditApp:
         self.tab_bar.grid(row=1, column=0, sticky="ew")
         self.tab_bar.bind("<Configure>", lambda _e: self.draw_tabs())
         self.tab_bar.bind("<Button-1>", self._tab_click)
+        self.tab_bar.bind("<Button-3>", self._tab_context_click)
+        self.tab_bar.bind("<Control-Button-1>", self._tab_context_click)
         self.tab_bar.bind("<Motion>", self._tab_motion)
         self.tab_bar.bind("<Leave>", self._tab_leave)
         self.paned = tk.PanedWindow(self.root, orient="horizontal", sashwidth=6, bd=0, showhandle=False)
@@ -759,19 +761,22 @@ class KindEditApp:
         for tab in self.tabs:
             selected = tab.id == self.active_tab_id
             title = tab.title + (" *" if tab.dirty else "")
-            display_title = self._truncate_tab_title(title)
-            title_w = self.tab_font.measure(display_title)
-            tab_w = max(116, min(240, title_w + 48))
+            preferred_title = self._truncate_tab_title(title)
+            title_w = self.tab_font.measure(preferred_title)
+            tab_w = max(116, min(240, title_w + 56))
+            close_x1 = x + tab_w - 32
+            title_available_w = max(12, close_x1 - (x + 12) - 8)
+            display_title = self._fit_tab_title(title, title_available_w)
             bg = self.palette["panel"] if selected else self.palette["tab_inactive"]
             fg = self.palette["text"] if selected else self.palette["muted"]
             self.tab_bar.create_rectangle(x, y, x + tab_w, y + tab_h, fill=bg, outline="")
             self.tab_bar.create_text(x + 12, y + tab_h // 2, text=display_title, anchor="w", fill=fg, font=self.tab_font)
-            close_x1 = x + tab_w - 32
             self.tab_bar.create_text(close_x1 + 14, y + tab_h // 2, text="×", anchor="center", fill=self.palette["muted"], font=self.tab_font)
             if selected:
                 self.tab_bar.create_rectangle(x, y + tab_h - 2, x + tab_w, y + tab_h, fill=self.palette["accent"], outline="")
-            self.tab_hotspots.append((x, y, close_x1, y + tab_h, "select", tab.id, title))
-            self.tab_hotspots.append((close_x1, y, x + tab_w, y + tab_h, "close", tab.id, title))
+            tooltip = self._tab_tooltip_text(tab)
+            self.tab_hotspots.append((x, y, close_x1, y + tab_h, "select", tab.id, tooltip))
+            self.tab_hotspots.append((close_x1, y, x + tab_w, y + tab_h, "close", tab.id, tooltip))
             x += tab_w + 6
         add_w = 40
         self.tab_bar.create_rectangle(x, y, x + add_w, y + tab_h, fill=self.palette["panel2"], outline="")
@@ -783,6 +788,22 @@ class KindEditApp:
             return text
         return text[:TAB_TITLE_PREFIX_CHARS] + "..."
 
+    def _fit_tab_title(self, text: str, max_width: int) -> str:
+        display_title = self._truncate_tab_title(text)
+        if self.tab_font.measure(display_title) <= max_width:
+            return display_title
+        ellipsis = "..."
+        if self.tab_font.measure(ellipsis) > max_width:
+            return ""
+        for length in range(min(TAB_TITLE_PREFIX_CHARS, len(text)), 0, -1):
+            candidate = text[:length] + ellipsis
+            if self.tab_font.measure(candidate) <= max_width:
+                return candidate
+        return ellipsis
+
+    def _tab_tooltip_text(self, tab: TabState) -> str:
+        return tab.file_path or tab.title
+
     def _tab_click(self, event) -> None:
         for x1, y1, x2, y2, action, tab_id, _title in self.tab_hotspots:
             if x1 <= event.x <= x2 and y1 <= event.y <= y2:
@@ -793,6 +814,64 @@ class KindEditApp:
                 elif action == "new":
                     self.new_tab()
                 return
+
+    def _tab_context_click(self, event) -> str | None:
+        self._hide_tab_tooltip()
+        tab_id = self._tab_id_at(event.x, event.y)
+        if tab_id:
+            self._show_tab_context_menu(tab_id, event.x_root, event.y_root)
+        return "break"
+
+    def _tab_id_at(self, x: int, y: int) -> str | None:
+        for x1, y1, x2, y2, action, tab_id, _title in self.tab_hotspots:
+            if action not in {"select", "close"}:
+                continue
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                return tab_id
+        return None
+
+    def _show_tab_context_menu(self, tab_id: str, x: int, y: int) -> None:
+        if not any(tab.id == tab_id for tab in self.tabs):
+            return
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.configure(
+            bg=self.palette["panel"],
+            fg=self.palette["text"],
+            activebackground=self.palette["selection"],
+            activeforeground=self.palette["text"],
+            disabledforeground=self.palette["muted"],
+        )
+        menu.add_command(label="关闭当前文档", command=lambda: self.close_tab(tab_id))
+        menu.add_command(
+            label="关闭其它文档",
+            command=lambda: self.close_tabs(self._tab_ids_except(tab_id)),
+            state="normal" if len(self.tabs) > 1 else "disabled",
+        )
+        menu.add_command(
+            label="关闭右侧所有",
+            command=lambda: self.close_tabs(self._tab_ids_on_side(tab_id, "right")),
+            state="normal" if self._tab_ids_on_side(tab_id, "right") else "disabled",
+        )
+        menu.add_command(
+            label="关闭左侧所有",
+            command=lambda: self.close_tabs(self._tab_ids_on_side(tab_id, "left")),
+            state="normal" if self._tab_ids_on_side(tab_id, "left") else "disabled",
+        )
+        try:
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+
+    def _tab_ids_except(self, tab_id: str) -> list[str]:
+        return [tab.id for tab in self.tabs if tab.id != tab_id]
+
+    def _tab_ids_on_side(self, tab_id: str, side: str) -> list[str]:
+        index = next((i for i, tab in enumerate(self.tabs) if tab.id == tab_id), None)
+        if index is None:
+            return []
+        if side == "left":
+            return [tab.id for tab in self.tabs[:index]]
+        return [tab.id for tab in self.tabs[index + 1 :]]
 
     def _confirm_discard_or_save_tab(self, tab: TabState) -> bool:
         if not tab.dirty:
@@ -855,7 +934,7 @@ class KindEditApp:
         self.tab_bar.configure(cursor="")
         hovered = None
         for x1, y1, x2, y2, action, tab_id, title in self.tab_hotspots:
-            if action != "select":
+            if action not in {"select", "close"}:
                 continue
             if x1 <= event.x <= x2 and y1 <= event.y <= y2:
                 hovered = (tab_id, title)
@@ -978,16 +1057,16 @@ class KindEditApp:
         self.switch_tab(tab.id)
         self.set_status("已新增页签")
 
-    def close_tab(self, tab_id: str) -> None:
+    def close_tab(self, tab_id: str) -> bool:
         if not any(t.id == tab_id for t in self.tabs):
             self.refresh_tabs()
-            return
+            return True
         closing = next(t for t in self.tabs if t.id == tab_id)
         if not self._confirm_discard_or_save_tab(closing):
-            return
+            return False
         if closing.id == self.active_tab_id and self._needs_large_snapshot_before_leave(closing):
             self._snapshot_active_large_tab(lambda target=tab_id: self.close_tab(target))
-            return
+            return False
         if len(self.tabs) == 1:
             tab = self.tabs[0]
             self.active_tab_id = tab.id
@@ -1007,7 +1086,7 @@ class KindEditApp:
             self.refresh_tabs()
             self.save_session()
             self.editor.request_text_cursor_refresh()
-            return
+            return True
         idx = next((i for i, t in enumerate(self.tabs) if t.id == tab_id), 0)
         closing = self.tabs[idx]
         if closing.id == self.active_tab_id:
@@ -1029,6 +1108,14 @@ class KindEditApp:
         else:
             self.refresh_tabs()
             self.save_session()
+        return True
+
+    def close_tabs(self, tab_ids: list[str]) -> None:
+        for tab_id in list(tab_ids):
+            if not any(tab.id == tab_id for tab in self.tabs):
+                continue
+            if not self.close_tab(tab_id):
+                break
 
     def on_text_change(self) -> None:
         if self.loading_text or not self.active_tab_id:
