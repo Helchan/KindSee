@@ -815,10 +815,16 @@ class KindEditApp:
                 return
 
     def _bind_tab_context_events(self) -> None:
-        for sequence in ("<Button-2>", "<Button-3>", "<Control-Button-1>"):
-            self.tab_bar.bind(sequence, self._tab_context_click)
+        for sequence in ("<ButtonPress-2>", "<ButtonPress-3>", "<Control-ButtonPress-1>"):
+            self.tab_bar.bind(sequence, self._tab_context_press)
+        for sequence in ("<ButtonRelease-2>", "<ButtonRelease-3>", "<Control-ButtonRelease-1>"):
+            self.tab_bar.bind(sequence, self._tab_context_release)
 
-    def _tab_context_click(self, event) -> str | None:
+    def _tab_context_press(self, event) -> str:
+        self._hide_tab_tooltip()
+        return "break"
+
+    def _tab_context_release(self, event) -> str:
         self._hide_tab_tooltip()
         tab_id = self._tab_id_at(event.x, event.y)
         if tab_id:
