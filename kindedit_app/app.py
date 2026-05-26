@@ -78,6 +78,7 @@ class KindEditApp:
         self.tab_hotspots: list[tuple[int, int, int, int, str, str, str]] = []
         self.tab_tooltip: tk.Toplevel | None = None
         self.tab_tooltip_tab_id: str | None = None
+        self.tab_context_menu: tk.Menu | None = None
         self.effective_dark = False
         self._build_ui()
         self._load_tabs()
@@ -768,11 +769,21 @@ class KindEditApp:
             display_title = self._fit_tab_title(title, title_available_w)
             bg = self.palette["panel"] if selected else self.palette["tab_inactive"]
             fg = self.palette["text"] if selected else self.palette["muted"]
-            self.tab_bar.create_rectangle(x, y, x + tab_w, y + tab_h, fill=bg, outline="")
-            self.tab_bar.create_text(x + 12, y + tab_h // 2, text=display_title, anchor="w", fill=fg, font=self.tab_font)
+            tab_tags = self._tab_item_tags(tab.id)
+            self.tab_bar.create_rectangle(x, y, x + tab_w, y + tab_h, fill=bg, outline="", tags=tab_tags)
+            self.tab_bar.create_text(
+                x + 12,
+                y + tab_h // 2,
+                text=display_title,
+                anchor="w",
+                fill=fg,
+                font=self.tab_font,
+                tags=tab_tags,
+            )
             self.tab_bar.create_text(close_x1 + 14, y + tab_h // 2, text="×", anchor="center", fill=self.palette["muted"], font=self.tab_font)
             if selected:
                 self.tab_bar.create_rectangle(x, y + tab_h - 2, x + tab_w, y + tab_h, fill=self.palette["accent"], outline="")
+            self._bind_tab_item_context(tab.id)
             tooltip = self._tab_tooltip_text(tab)
             self.tab_hotspots.append((x, y, close_x1, y + tab_h, "select", tab.id, tooltip))
             self.tab_hotspots.append((close_x1, y, x + tab_w, y + tab_h, "close", tab.id, tooltip))
@@ -814,6 +825,16 @@ class KindEditApp:
                     self.new_tab()
                 return
 
+    def _tab_item_tags(self, tab_id: str) -> tuple[str, str]:
+        return ("tab_context_target", f"tab_context_{tab_id}")
+
+    def _bind_tab_item_context(self, tab_id: str) -> None:
+        tag = f"tab_context_{tab_id}"
+        for sequence in ("<ButtonPress-2>", "<ButtonPress-3>", "<Control-ButtonPress-1>"):
+            self.tab_bar.tag_bind(tag, sequence, self._tab_context_press)
+        for sequence in ("<ButtonRelease-2>", "<ButtonRelease-3>", "<Control-ButtonRelease-1>"):
+            self.tab_bar.tag_bind(tag, sequence, lambda event, target=tab_id: self._tab_context_release(event, target))
+
     def _bind_tab_context_events(self) -> None:
         for sequence in ("<ButtonPress-2>", "<ButtonPress-3>", "<Control-ButtonPress-1>"):
             self.tab_bar.bind(sequence, self._tab_context_press)
@@ -824,9 +845,9 @@ class KindEditApp:
         self._hide_tab_tooltip()
         return "break"
 
-    def _tab_context_release(self, event) -> str:
+    def _tab_context_release(self, event, tab_id: str | None = None) -> str:
         self._hide_tab_tooltip()
-        tab_id = self._tab_id_at(event.x, event.y)
+        tab_id = tab_id or self._tab_id_at(event.x, event.y)
         if tab_id:
             self._show_tab_context_menu(tab_id, event.x_root, event.y_root)
         return "break"
@@ -842,7 +863,14 @@ class KindEditApp:
     def _show_tab_context_menu(self, tab_id: str, x: int, y: int) -> None:
         if not any(tab.id == tab_id for tab in self.tabs):
             return
+        if self.tab_context_menu is not None:
+            try:
+                self.tab_context_menu.unpost()
+                self.tab_context_menu.destroy()
+            except tk.TclError:
+                pass
         menu = tk.Menu(self.root, tearoff=0)
+        self.tab_context_menu = menu
         menu.configure(
             bg=self.palette["panel"],
             fg=self.palette["text"],
