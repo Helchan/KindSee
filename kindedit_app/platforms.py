@@ -53,13 +53,9 @@ def apply_titlebar_theme(root, dark: bool) -> None:
             root.update_idletasks()
             window = str(root)
             appearance = "darkaqua" if dark else "aqua"
-            for command in (
-                ("tk::unsupported::MacWindowStyle", "style", window, "document", "none"),
-                ("tk::unsupported::MacWindowStyle", "appearance", window, appearance),
-            ):
-                try:
-                    root.tk.call(*command)
-                except Exception:
-                    pass
+            try:
+                root.tk.call("tk::unsupported::MacWindowStyle", "appearance", window, appearance)
+            except Exception:
+                pass
     except Exception:
         pass
