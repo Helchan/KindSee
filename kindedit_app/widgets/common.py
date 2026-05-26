@@ -232,6 +232,7 @@ class LineNumberText(tk.Frame):
         self.pending_occurrence_selection: str | None = None
         self.occurrence_ignore_case = False
         self.occurrence_modifier_down = False
+        self.add_selection_anchor: str | None = None
         self.cursor_refresh_job = None
         self.cursor_refresh_needed = True
         self.bulk_job = None
@@ -286,8 +287,11 @@ class LineNumberText(tk.Frame):
         self.text.bind("<ButtonRelease-1>", self._column_edit_release, add="+")
         self.text.bind("<KeyPress>", self._column_edit_key, add="+")
         self.text.bind("<Double-ButtonRelease-1>", self._button_release)
-        self.text.bind("<Control-ButtonRelease-1>", self._button_release)
-        self.text.bind("<Control-Double-ButtonRelease-1>", self._button_release)
+        self.text.bind("<Control-Button-1>", self._add_selection_press)
+        self.text.bind("<Control-B1-Motion>", self._add_selection_motion)
+        self.text.bind("<Control-ButtonRelease-1>", self._add_selection_release)
+        self.text.bind("<Control-Double-Button-1>", self._add_selection_double_click)
+        self.text.bind("<Control-Double-ButtonRelease-1>", self._add_selection_release)
         self.text.bind("<Control-KeyPress>", self._modifier_key_press, add="+")
         self.text.bind("<Control-KeyRelease>", self._modifier_key_release, add="+")
         self.text.bind("<KeyPress-Control_L>", self._modifier_key_press, add="+")
@@ -654,7 +658,52 @@ class LineNumberText(tk.Frame):
 
     def _button_press(self, event=None) -> None:
         self.clear_column_edit()
+        self.add_selection_anchor = None
         return None
+
+    def _add_selection_press(self, event) -> str:
+        self.clear_column_edit()
+        self.add_selection_anchor = self.text.index(f"@{event.x},{event.y}")
+        self.text.mark_set("insert", self.add_selection_anchor)
+        self.text.focus_set()
+        return "break"
+
+    def _add_selection_motion(self, event) -> str:
+        if not self.add_selection_anchor:
+            return "break"
+        self._select_between(self.add_selection_anchor, self.text.index(f"@{event.x},{event.y}"))
+        return "break"
+
+    def _add_selection_release(self, event) -> str:
+        self.on_cursor()
+        if self.add_selection_anchor:
+            self._select_between(self.add_selection_anchor, self.text.index(f"@{event.x},{event.y}"))
+            self.add_selection_anchor = None
+        self.schedule_occurrence_highlight(0, add_query=True, selected_text=self._current_selection_text())
+        return "break"
+
+    def _add_selection_double_click(self, event) -> str:
+        index = self.text.index(f"@{event.x},{event.y}")
+        start = self.text.index(f"{index} wordstart")
+        end = self.text.index(f"{index} wordend")
+        self.add_selection_anchor = None
+        self.text.tag_remove("sel", "1.0", "end")
+        if self.text.compare(start, "!=", end):
+            self.text.tag_add("sel", start, end)
+            self.text.mark_set("insert", end)
+            self.text.see(end)
+            self.schedule_occurrence_highlight(0, add_query=True, selected_text=self._current_selection_text())
+        return "break"
+
+    def _select_between(self, anchor: str, target: str) -> None:
+        self.text.tag_remove("sel", "1.0", "end")
+        if self.text.compare(anchor, "==", target):
+            self.text.mark_set("insert", target)
+            return
+        start, end = (anchor, target) if self.text.compare(anchor, "<", target) else (target, anchor)
+        self.text.tag_add("sel", start, end)
+        self.text.mark_set("insert", target)
+        self.text.see(target)
 
     def _bind_column_edit_start_events(self) -> None:
         for sequence in column_edit_start_events(is_macos()):
