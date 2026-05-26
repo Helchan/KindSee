@@ -63,6 +63,7 @@ class AppConfig:
     theme: str = "system"
     sync_display: bool = True
     occurrence_ignore_case: bool = False
+    sql_uppercase_keywords: bool = True
     tabs: list[dict] = field(default_factory=list)
     active_tab_id: str | None = None
     legacy_text_content: str = ""
@@ -90,6 +91,7 @@ def load_config() -> AppConfig:
     cfg.theme = data.get("theme") if data.get("theme") in {"system", "light", "dark"} else "system"
     cfg.sync_display = bool(data.get("sync_display", True))
     cfg.occurrence_ignore_case = bool(data.get("occurrence_ignore_case", False))
+    cfg.sql_uppercase_keywords = bool(data.get("sql_uppercase_keywords", True))
     cfg.tabs = data.get("tabs") if isinstance(data.get("tabs"), list) else []
     cfg.active_tab_id = data.get("active_tab_id") if isinstance(data.get("active_tab_id"), str) else None
     cfg.legacy_text_content = data.get("text_content", "") if isinstance(data.get("text_content"), str) else ""
@@ -105,6 +107,7 @@ def save_config(cfg: AppConfig) -> None:
             "theme": cfg.theme,
             "sync_display": bool(cfg.sync_display),
             "occurrence_ignore_case": bool(cfg.occurrence_ignore_case),
+            "sql_uppercase_keywords": bool(cfg.sql_uppercase_keywords),
             "tabs": cfg.tabs,
             "active_tab_id": cfg.active_tab_id,
         }

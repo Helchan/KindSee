@@ -378,6 +378,7 @@ class LineNumberText(tk.Frame):
         if content:
             self.text.insert("1.0", content)
         self.large_content_mode = is_large_text_size(len(content))
+        self._reset_undo_stack()
         self.text.edit_modified(False)
         self.occurrence_queries = []
         self.clear_occurrence_highlight()
@@ -386,13 +387,21 @@ class LineNumberText(tk.Frame):
 
     def replace_all(self, content: str) -> None:
         self.cancel_bulk_operation()
+        self.text.edit_separator()
         self.text.delete("1.0", "end")
         self.text.insert("1.0", content)
+        self.text.edit_separator()
         self.large_content_mode = is_large_text_size(len(content))
         self.text.edit_modified(True)
         self.on_change()
         self._update_line_width()
         self._draw_lines()
+
+    def _reset_undo_stack(self) -> None:
+        try:
+            self.text.edit_reset()
+        except tk.TclError:
+            pass
 
     def cancel_bulk_operation(self) -> None:
         self.bulk_cancel_token += 1
@@ -443,6 +452,7 @@ class LineNumberText(tk.Frame):
             self.bulk_cleanup = None
             cleanup()
             self.text.configure(undo=old_undo)
+            self._reset_undo_stack()
             self.text.edit_modified(False)
             self._update_line_width()
             self._draw_lines()

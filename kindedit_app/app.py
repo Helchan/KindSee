@@ -210,9 +210,14 @@ class KindEditApp:
         mod = "Command" if is_macos() else "Control"
         self.root.bind_all(f"<{mod}-s>", lambda _e: (self.save_current_file(), "break"))
         self.root.bind_all(f"<{mod}-o>", lambda _e: (self.open_files(), "break"))
+        self.root.bind_all(f"<{mod}-z>", self.undo_text)
+        self.root.bind_all(f"<{mod}-Shift-Z>", self.redo_text)
         self.root.bind_all(f"<{mod}-c>", self.copy_tree_shortcut)
         self.root.bind_all("<Control-s>", lambda _e: (self.save_current_file(), "break"))
         self.root.bind_all("<Control-o>", lambda _e: (self.open_files(), "break"))
+        self.root.bind_all("<Control-z>", self.undo_text)
+        self.root.bind_all("<Control-y>", self.redo_text)
+        self.root.bind_all("<Control-Shift-Z>", self.redo_text)
 
     def _try_tkdnd(self) -> None:
         try:
@@ -1178,6 +1183,10 @@ class KindEditApp:
         self.editor.set_occurrence_ignore_case(self.config.occurrence_ignore_case)
         self.save_session()
 
+    def set_sql_uppercase_keywords(self, enabled: bool) -> None:
+        self.config.sql_uppercase_keywords = bool(enabled)
+        self.save_session()
+
     def update_title(self) -> None:
         if not self.active_tab_id:
             self.root.title(APP_TITLE)
@@ -1239,6 +1248,7 @@ class KindEditApp:
         self.config.theme = defaults.theme
         self.config.sync_display = defaults.sync_display
         self.config.occurrence_ignore_case = defaults.occurrence_ignore_case
+        self.config.sql_uppercase_keywords = defaults.sql_uppercase_keywords
         self.editor.set_occurrence_ignore_case(self.config.occurrence_ignore_case)
         self.apply_theme()
         self.save_session()
@@ -1293,12 +1303,59 @@ class KindEditApp:
         if self.active_tab_is_large():
             self.set_status("大文本模式下不执行全量格式化", error=True)
             return
+        doc_type = self.current_document_type()
         try:
-            content = self.current_document_type().format_text(self.editor.get())
+            if doc_type.type_id == "sql":
+                self._format_sql_text()
+                return
+            content = doc_type.format_text(self.editor.get())
         except Exception as exc:
             self.set_status(f"格式化失败：{exc}", error=True)
             return
         self.editor.replace_all(content)
+
+    def _format_sql_text(self) -> None:
+        doc_type = self.current_document_type()
+        uppercase_keywords = self.config.sql_uppercase_keywords
+        try:
+            start = self.editor.text.index("sel.first")
+            end = self.editor.text.index("sel.last")
+            selected = self.editor.text.get(start, end)
+        except tk.TclError:
+            start = end = ""
+            selected = ""
+        if selected:
+            content = doc_type.format_text(selected, uppercase_keywords=uppercase_keywords)
+            self.editor.text.edit_separator()
+            self.editor.text.delete(start, end)
+            self.editor.text.insert(start, content)
+            self.editor.text.tag_remove("sel", "1.0", "end")
+            self.editor.text.tag_add("sel", start, f"{start}+{len(content)}c")
+            self.editor.text.mark_set("insert", f"{start}+{len(content)}c")
+            self.editor.text.edit_separator()
+            self.editor.text.edit_modified(True)
+            self.editor._modified()
+            return
+        content = doc_type.format_text(self.editor.get(), uppercase_keywords=uppercase_keywords)
+        self.editor.replace_all(content)
+
+    def undo_text(self, _event=None) -> str:
+        try:
+            self.editor.text.edit_undo()
+        except tk.TclError:
+            return "break"
+        self.editor._modified()
+        self.on_cursor_move()
+        return "break"
+
+    def redo_text(self, _event=None) -> str:
+        try:
+            self.editor.text.edit_redo()
+        except tk.TclError:
+            return "break"
+        self.editor._modified()
+        self.on_cursor_move()
+        return "break"
 
     def compact_text(self) -> None:
         if self.active_tab_is_large():

@@ -3,70 +3,9 @@ from __future__ import annotations
 import re
 
 from .base import MAX_HIGHLIGHT_CHARS, MAX_HIGHLIGHT_TOKENS, SyntaxToken
+from ..sql_keywords import SQL_KEYWORDS, SQL_LITERALS
 
 
-KEYWORDS = {
-    "add",
-    "alter",
-    "and",
-    "as",
-    "asc",
-    "between",
-    "by",
-    "case",
-    "check",
-    "column",
-    "constraint",
-    "create",
-    "database",
-    "delete",
-    "desc",
-    "distinct",
-    "drop",
-    "else",
-    "end",
-    "exists",
-    "foreign",
-    "from",
-    "full",
-    "group",
-    "having",
-    "in",
-    "index",
-    "inner",
-    "insert",
-    "into",
-    "is",
-    "join",
-    "key",
-    "left",
-    "like",
-    "limit",
-    "merge",
-    "not",
-    "on",
-    "or",
-    "order",
-    "outer",
-    "primary",
-    "references",
-    "right",
-    "select",
-    "set",
-    "table",
-    "then",
-    "truncate",
-    "union",
-    "unique",
-    "update",
-    "values",
-    "view",
-    "when",
-    "where",
-    "with",
-}
-
-LITERALS = {"all", "any", "false", "null", "some", "true", "unknown"}
 IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
 NUMBER_RE = re.compile(r"(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
 
@@ -112,9 +51,9 @@ class SqlSyntaxHighlighter:
             match = IDENT_RE.match(text, i)
             if match:
                 word = match.group(0).lower()
-                if word in KEYWORDS:
+                if word in SQL_KEYWORDS:
                     tokens.append(SyntaxToken("key", match.start(), match.end()))
-                elif word in LITERALS:
+                elif word in SQL_LITERALS:
                     tokens.append(SyntaxToken("literal", match.start(), match.end()))
                 i = match.end()
                 continue

@@ -96,6 +96,7 @@ class SettingsDialog(tk.Toplevel):
         self.transient(app.root)
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         self.ignore_case_var = tk.BooleanVar(value=app.config.occurrence_ignore_case)
+        self.sql_uppercase_var = tk.BooleanVar(value=app.config.sql_uppercase_keywords)
         self.theme_var = tk.StringVar(value="dark" if app.effective_dark else "light")
         self._build()
         self.apply_palette(app.palette, app.effective_dark)
@@ -117,17 +118,26 @@ class SettingsDialog(tk.Toplevel):
             padx=0,
         )
         self.ignore_case.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        self.sql_uppercase = tk.Checkbutton(
+            self.container,
+            text="SQL 格式化大写关键字",
+            variable=self.sql_uppercase_var,
+            command=self._toggle_sql_uppercase_keywords,
+            anchor="w",
+            padx=0,
+        )
+        self.sql_uppercase.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 12))
         self.theme_row = tk.Frame(self.container, bd=0, highlightthickness=0)
-        self.theme_row.grid(row=2, column=0, sticky="ew", pady=(0, 12))
+        self.theme_row.grid(row=3, column=0, sticky="ew", pady=(0, 12))
         self.theme_row.grid_columnconfigure(1, weight=1)
         self.theme_label = tk.Label(self.theme_row, text="当前主题：", anchor="w")
         self.theme_label.grid(row=0, column=0, sticky="w")
         self.theme_segment = ThemeSegment(self.theme_row, self.theme_var, self._select_theme)
         self.theme_segment.grid(row=0, column=1, sticky="e")
         self.reset_button = DialogButton(self.container, text="重置", command=self._reset_settings, width=84)
-        self.reset_button.grid(row=3, column=0, sticky="w")
+        self.reset_button.grid(row=4, column=0, sticky="w")
         self.close_button = DialogButton(self.container, text="关闭", command=self.destroy, width=84)
-        self.close_button.grid(row=3, column=1, sticky="e", padx=(24, 0))
+        self.close_button.grid(row=4, column=1, sticky="e", padx=(24, 0))
 
     def apply_palette(self, palette: dict, dark: bool | None = None) -> None:
         self.palette = palette
@@ -137,6 +147,13 @@ class SettingsDialog(tk.Toplevel):
         self.theme_row.configure(bg=palette["panel"])
         self.theme_label.configure(bg=palette["panel"], fg=palette["text"])
         self.ignore_case.configure(
+            bg=palette["panel"],
+            fg=palette["text"],
+            activebackground=palette["panel"],
+            activeforeground=palette["text"],
+            selectcolor=palette["input"],
+        )
+        self.sql_uppercase.configure(
             bg=palette["panel"],
             fg=palette["text"],
             activebackground=palette["panel"],
@@ -153,6 +170,9 @@ class SettingsDialog(tk.Toplevel):
     def _toggle_ignore_case(self) -> None:
         self.app.set_occurrence_ignore_case(self.ignore_case_var.get())
 
+    def _toggle_sql_uppercase_keywords(self) -> None:
+        self.app.set_sql_uppercase_keywords(self.sql_uppercase_var.get())
+
     def _select_theme(self) -> None:
         selected = self.theme_var.get()
         if selected not in {"light", "dark"}:
@@ -166,6 +186,7 @@ class SettingsDialog(tk.Toplevel):
     def _reset_settings(self) -> None:
         self.app.reset_settings()
         self.ignore_case_var.set(self.app.config.occurrence_ignore_case)
+        self.sql_uppercase_var.set(self.app.config.sql_uppercase_keywords)
         self.apply_palette(self.app.palette, self.app.effective_dark)
 
     def _center(self) -> None:

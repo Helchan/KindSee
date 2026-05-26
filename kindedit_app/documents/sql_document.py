@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 from .base import EmptyPositionIndex, ParseResult, TreeNode
+from ..sql_keywords import SQL_KEYWORDS
 
 try:
     import sqlglot
@@ -24,42 +25,6 @@ SQL_CONTENT_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 NUMBER_LITERAL_RE = re.compile(r"(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
-SQL_KEYWORDS = {
-    "alter",
-    "and",
-    "as",
-    "by",
-    "case",
-    "create",
-    "delete",
-    "drop",
-    "else",
-    "end",
-    "from",
-    "group",
-    "having",
-    "insert",
-    "into",
-    "join",
-    "left",
-    "limit",
-    "merge",
-    "on",
-    "or",
-    "order",
-    "right",
-    "select",
-    "set",
-    "table",
-    "then",
-    "truncate",
-    "union",
-    "update",
-    "values",
-    "when",
-    "where",
-    "with",
-}
 LINE_BREAK_BEFORE = {"from", "where", "group", "having", "order", "limit", "union", "join", "left", "right", "inner", "outer", "set", "values"}
 CLAUSE_KEYWORDS = {"from", "where", "group", "having", "order", "limit", "union", "join", "left", "right", "inner", "outer", "set", "values"}
 EXPRESSION_CONNECTORS = {"and", "or"}
@@ -100,11 +65,15 @@ class SqlGlotSyntaxValidator:
             return f"语法错误：{exc}"
         return ""
 
-    def format_text(self, text: str) -> str:
+    def format_text(self, text: str, uppercase_keywords: bool = True) -> str:
         if sqlglot is None:
-            return _format_sql_text(text)
-        formatted = sqlglot.transpile(text, read=SQLGLOT_DIALECT, write=SQLGLOT_DIALECT, pretty=True)
-        return ";\n".join(item.rstrip(";") for item in formatted if item.strip()) + (";" if text.strip().endswith(";") else "")
+            return _format_sql_text(text, uppercase_keywords=uppercase_keywords)
+        formatted = _sqlglot_transpile_pretty(text, uppercase_keywords)
+        statements = [_apply_keyword_case(item.rstrip(";"), uppercase_keywords) for item in formatted if item.strip()]
+        result = ";\n\n".join(statements)
+        if result and text.strip().endswith(";"):
+            result += ";"
+        return _separate_formatted_statements(result)
 
 
 class SqlDocumentType:
@@ -139,11 +108,11 @@ class SqlDocumentType:
             return ParseResult(None, EmptyPositionIndex(), error, True)
         return ParseResult(None, EmptyPositionIndex(), "", False)
 
-    def format_text(self, text: str) -> str:
+    def format_text(self, text: str, uppercase_keywords: bool = True) -> str:
         result = self.parse(text)
         if result.error:
             raise ValueError(result.status)
-        return SqlGlotSyntaxValidator().format_text(text)
+        return SqlGlotSyntaxValidator().format_text(text, uppercase_keywords=uppercase_keywords)
 
     def compact_text(self, text: str) -> str:
         raise ValueError("SQL 文件暂不支持压缩")
@@ -391,7 +360,21 @@ def _sqlglot_error_message(exc: SqlGlotParseError) -> str:
     return f"语法错误：{exc}"
 
 
-def _format_sql_text(text: str) -> str:
+def _sqlglot_transpile_pretty(text: str, uppercase_keywords: bool) -> list[str]:
+    kwargs = {
+        "read": SQLGLOT_DIALECT,
+        "write": SQLGLOT_DIALECT,
+        "pretty": True,
+        "normalize": uppercase_keywords,
+    }
+    try:
+        return sqlglot.transpile(text, **kwargs)
+    except TypeError:
+        kwargs.pop("normalize", None)
+        return sqlglot.transpile(text, **kwargs)
+
+
+def _format_sql_text(text: str, uppercase_keywords: bool = True) -> str:
     tokens = _sql_tokens(text, include_comments=True)
     if not tokens:
         return ""
@@ -400,7 +383,7 @@ def _format_sql_text(text: str) -> str:
     indent = 0
     previous = ""
     for token in tokens:
-        value = _format_token_value(token)
+        value = _format_token_value(token, uppercase_keywords)
         lower = token.value.lower()
         if token.kind == "comment":
             if current.strip():
@@ -412,6 +395,7 @@ def _format_sql_text(text: str) -> str:
         if value == ";":
             current = current.rstrip() + ";"
             lines.append(current.rstrip())
+            lines.append("")
             current = ""
             previous = value
             continue
@@ -440,7 +424,7 @@ def _format_sql_text(text: str) -> str:
         previous = value
     if current.strip():
         lines.append(current.rstrip())
-    return "\n".join(line for line in lines if line.strip())
+    return _separate_formatted_statements("\n".join(lines))
 
 
 def _append_sql_part(current: str, value: str, previous: str) -> str:
@@ -451,11 +435,53 @@ def _append_sql_part(current: str, value: str, previous: str) -> str:
     return current + " " + value
 
 
-def _format_token_value(token: SqlToken) -> str:
+def _format_token_value(token: SqlToken, uppercase_keywords: bool = True) -> str:
     lower = token.value.lower()
     if token.kind == "word" and lower in SQL_KEYWORDS:
-        return lower.upper()
+        return lower.upper() if uppercase_keywords else lower
     return token.value
+
+
+def _apply_keyword_case(text: str, uppercase_keywords: bool) -> str:
+    tokens = _sql_tokens(text, include_comments=True)
+    if not tokens:
+        return text
+    parts: list[str] = []
+    offset = 0
+    for token in tokens:
+        parts.append(text[offset : token.start])
+        parts.append(_format_token_value(token, uppercase_keywords))
+        offset = token.start + len(token.value)
+    parts.append(text[offset:])
+    return "".join(parts)
+
+
+def _separate_formatted_statements(text: str) -> str:
+    stripped = text.strip()
+    if not stripped:
+        return ""
+    tokens = _sql_tokens(stripped, include_comments=True)
+    if not any(token.value == ";" for token in tokens):
+        return stripped
+    parts: list[str] = []
+    offset = 0
+    for token in tokens:
+        if token.value != ";":
+            continue
+        next_offset = _next_nonspace_offset(stripped, token.start + len(token.value))
+        if next_offset >= len(stripped):
+            continue
+        parts.append(stripped[offset : token.start + 1].rstrip())
+        parts.append("\n\n")
+        offset = next_offset
+    parts.append(stripped[offset:].strip())
+    return "".join(parts).strip()
+
+
+def _next_nonspace_offset(text: str, offset: int) -> int:
+    while offset < len(text) and text[offset].isspace():
+        offset += 1
+    return offset
 
 
 def _sql_tokens(text: str, include_comments: bool = False) -> list[SqlToken]:
