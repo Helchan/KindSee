@@ -43,6 +43,8 @@ from .widgets import FastContextMenu, JsonTreeCanvas, LineNumberText, MarkdownPr
 TAB_TITLE_FONT_SIZE = 10
 TAB_TITLE_MAX_CHARS = 20
 TAB_TITLE_PREFIX_CHARS = 17
+CONTROL_MASK = 0x0004
+TAB_CONTEXT_EVENTS = ("<ButtonPress>",)
 
 
 class KindEditApp:
@@ -79,6 +81,7 @@ class KindEditApp:
         self.tab_tooltip: tk.Toplevel | None = None
         self.tab_tooltip_tab_id: str | None = None
         self.tab_context_menu: tk.Menu | None = None
+        self.tab_context_after_id: str | None = None
         self.effective_dark = False
         self._build_ui()
         self._load_tabs()
@@ -814,7 +817,9 @@ class KindEditApp:
     def _tab_tooltip_text(self, tab: TabState) -> str:
         return tab.file_path or tab.title
 
-    def _tab_click(self, event) -> None:
+    def _tab_click(self, event) -> str | None:
+        if self._is_tab_context_event(event):
+            return self._invoke_tab_context_menu(event)
         for x1, y1, x2, y2, action, tab_id, _title in self.tab_hotspots:
             if x1 <= event.x <= x2 and y1 <= event.y <= y2:
                 if action == "select":
@@ -830,27 +835,41 @@ class KindEditApp:
 
     def _bind_tab_item_context(self, tab_id: str) -> None:
         tag = f"tab_context_{tab_id}"
-        for sequence in ("<ButtonPress-2>", "<ButtonPress-3>", "<Control-ButtonPress-1>"):
-            self.tab_bar.tag_bind(tag, sequence, self._tab_context_press)
-        for sequence in ("<ButtonRelease-2>", "<ButtonRelease-3>", "<Control-ButtonRelease-1>"):
-            self.tab_bar.tag_bind(tag, sequence, lambda event, target=tab_id: self._tab_context_release(event, target))
+        for sequence in TAB_CONTEXT_EVENTS:
+            self.tab_bar.tag_bind(tag, sequence, lambda event, target=tab_id: self._invoke_tab_context_menu(event, target))
 
     def _bind_tab_context_events(self) -> None:
-        for sequence in ("<ButtonPress-2>", "<ButtonPress-3>", "<Control-ButtonPress-1>"):
-            self.tab_bar.bind(sequence, self._tab_context_press)
-        for sequence in ("<ButtonRelease-2>", "<ButtonRelease-3>", "<Control-ButtonRelease-1>"):
-            self.tab_bar.bind(sequence, self._tab_context_release)
+        for sequence in TAB_CONTEXT_EVENTS:
+            self.tab_bar.bind(sequence, self._invoke_tab_context_menu)
 
-    def _tab_context_press(self, event) -> str:
+    def _invoke_tab_context_menu(self, event, tab_id: str | None = None) -> str | None:
+        if not self._is_tab_context_event(event):
+            return None
+        target_tab_id = tab_id or self._tab_id_at(event.x, event.y)
+        if not target_tab_id:
+            return None
         self._hide_tab_tooltip()
+        x_root = event.x_root
+        y_root = event.y_root
+        if self.tab_context_after_id is not None:
+            try:
+                self.root.after_cancel(self.tab_context_after_id)
+            except tk.TclError:
+                pass
+        self.tab_context_after_id = self.root.after_idle(
+            lambda target=target_tab_id, x=x_root, y=y_root: self._show_pending_tab_context_menu(target, x, y)
+        )
         return "break"
 
-    def _tab_context_release(self, event, tab_id: str | None = None) -> str:
-        self._hide_tab_tooltip()
-        tab_id = tab_id or self._tab_id_at(event.x, event.y)
-        if tab_id:
-            self._show_tab_context_menu(tab_id, event.x_root, event.y_root)
-        return "break"
+    def _show_pending_tab_context_menu(self, tab_id: str, x: int, y: int) -> None:
+        self.tab_context_after_id = None
+        self._show_tab_context_menu(tab_id, x, y)
+
+    def _is_tab_context_event(self, event) -> bool:
+        event_num = getattr(event, "num", None)
+        if event_num in (2, 3):
+            return True
+        return event_num == 1 and bool(getattr(event, "state", 0) & CONTROL_MASK)
 
     def _tab_id_at(self, x: int, y: int) -> str | None:
         for x1, y1, x2, y2, action, tab_id, _title in self.tab_hotspots:
@@ -874,7 +893,7 @@ class KindEditApp:
         menu.configure(
             bg=self.palette["panel"],
             fg=self.palette["text"],
-            activebackground=self.palette["selection"],
+            activebackground=self.palette["hover"],
             activeforeground=self.palette["text"],
             disabledforeground=self.palette["muted"],
         )
@@ -1012,8 +1031,8 @@ class KindEditApp:
         self.tab_tooltip_tab_id = tab_id
 
     def _bind_tab_tooltip_context(self, widget: tk.Misc, tab_id: str) -> None:
-        for sequence in ("<ButtonRelease-2>", "<ButtonRelease-3>", "<Control-ButtonRelease-1>"):
-            widget.bind(sequence, lambda event, target=tab_id: self._tab_context_release(event, target))
+        for sequence in TAB_CONTEXT_EVENTS:
+            widget.bind(sequence, lambda event, target=tab_id: self._invoke_tab_context_menu(event, target))
 
     def _hide_tab_tooltip(self) -> None:
         if self.tab_tooltip is not None:
