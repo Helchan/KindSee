@@ -128,7 +128,7 @@ class KindEditApp:
         self.status.grid(row=3, column=0, sticky="ew")
         self.editor.text.bind("<Button-2>", self.show_text_menu)
         self.editor.text.bind("<Button-3>", self.show_text_menu)
-        self.editor.text.bind("<<Paste>>", self.before_text_paste)
+        self.editor.text.bind("<<Paste>>", self.before_text_paste, add="+")
         self.editor.set_occurrence_ignore_case(self.config.occurrence_ignore_case)
 
     def _build_toolbar(self) -> None:
@@ -212,12 +212,17 @@ class KindEditApp:
         self.root.bind_all(f"<{mod}-o>", lambda _e: (self.open_files(), "break"))
         self.root.bind_all(f"<{mod}-z>", self.undo_text)
         self.root.bind_all(f"<{mod}-Shift-Z>", self.redo_text)
+        self.editor.text.bind(f"<{mod}-z>", self.undo_text)
+        self.editor.text.bind(f"<{mod}-Shift-Z>", self.redo_text)
         self.root.bind_all(f"<{mod}-c>", self.copy_tree_shortcut)
         self.root.bind_all("<Control-s>", lambda _e: (self.save_current_file(), "break"))
         self.root.bind_all("<Control-o>", lambda _e: (self.open_files(), "break"))
         self.root.bind_all("<Control-z>", self.undo_text)
         self.root.bind_all("<Control-y>", self.redo_text)
         self.root.bind_all("<Control-Shift-Z>", self.redo_text)
+        self.editor.text.bind("<Control-z>", self.undo_text)
+        self.editor.text.bind("<Control-y>", self.redo_text)
+        self.editor.text.bind("<Control-Shift-Z>", self.redo_text)
 
     def _try_tkdnd(self) -> None:
         try:
@@ -1326,13 +1331,13 @@ class KindEditApp:
             selected = ""
         if selected:
             content = doc_type.format_text(selected, uppercase_keywords=uppercase_keywords)
-            self.editor.text.edit_separator()
+            self.editor.begin_undo_action()
             self.editor.text.delete(start, end)
             self.editor.text.insert(start, content)
             self.editor.text.tag_remove("sel", "1.0", "end")
             self.editor.text.tag_add("sel", start, f"{start}+{len(content)}c")
             self.editor.text.mark_set("insert", f"{start}+{len(content)}c")
-            self.editor.text.edit_separator()
+            self.editor.end_undo_action()
             self.editor.text.edit_modified(True)
             self.editor._modified()
             return
@@ -1391,11 +1396,13 @@ class KindEditApp:
         if is_large_text_size(len(content)):
             self._insert_large_clipboard_text(content)
             return
+        self.editor.begin_undo_action()
         try:
             self.editor.text.delete("sel.first", "sel.last")
         except tk.TclError:
             pass
         self.editor.text.insert("insert", content)
+        self.editor.end_undo_action()
         self.editor.text.edit_modified(True)
         self.editor._modified()
 

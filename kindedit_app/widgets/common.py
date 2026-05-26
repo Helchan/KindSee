@@ -34,6 +34,7 @@ OCCURRENCE_MODIFIER_KEYSYMS = {
     "Super_R",
 }
 WHEEL_SCROLL_UNITS = 6
+UNDO_TYPING_IDLE_MS = 900
 MACOS_COLUMN_EDIT_START_EVENTS = ("<Option-Button-1>", "<Alt-Button-1>", "<Mod1-Button-1>", "<Mod2-Button-1>")
 DEFAULT_COLUMN_EDIT_START_EVENTS = ("<Alt-Button-1>",)
 
@@ -239,6 +240,9 @@ class LineNumberText(tk.Frame):
         self.bulk_cancel_token = 0
         self.bulk_cleanup: Callable[[], None] | None = None
         self.large_content_mode = False
+        self.undo_separator_job = None
+        self.undo_last_typing_at = 0.0
+        self.undo_last_typing_kind = ""
         self.column_edit_anchor: str | None = None
         self.column_edit_active = False
         self.column_edit_lines: list[int] = []
@@ -257,7 +261,7 @@ class LineNumberText(tk.Frame):
             self,
             wrap="none",
             undo=True,
-            autoseparators=True,
+            autoseparators=False,
             maxundo=-1,
             bd=0,
             highlightthickness=0,
@@ -279,6 +283,9 @@ class LineNumberText(tk.Frame):
         self.grid_columnconfigure(1, weight=1)
         self.text.configure(yscrollcommand=self._yscroll, xscrollcommand=self._xscroll)
         self.text.bind("<<Modified>>", self._modified)
+        self.text.bind("<KeyPress>", self._undo_key_press, add="+")
+        self.text.bind("<<Paste>>", self._paste_undo_boundary, add="+")
+        self.text.bind("<<Cut>>", self._cut_undo_boundary, add="+")
         self.text.bind("<KeyRelease>", self._key_release)
         self.text.bind("<ButtonRelease-1>", self._button_release)
         self.text.bind("<Button-1>", self._button_press, add="+")
@@ -387,21 +394,115 @@ class LineNumberText(tk.Frame):
 
     def replace_all(self, content: str) -> None:
         self.cancel_bulk_operation()
-        self.text.edit_separator()
+        self.begin_undo_action()
         self.text.delete("1.0", "end")
         self.text.insert("1.0", content)
-        self.text.edit_separator()
+        self.end_undo_action()
         self.large_content_mode = is_large_text_size(len(content))
         self.text.edit_modified(True)
         self.on_change()
         self._update_line_width()
         self._draw_lines()
 
+    def begin_undo_action(self) -> None:
+        self._cancel_undo_separator_job()
+        self._push_undo_separator()
+
+    def end_undo_action(self) -> None:
+        self.undo_last_typing_kind = ""
+        self.undo_last_typing_at = 0.0
+        self._push_undo_separator()
+
     def _reset_undo_stack(self) -> None:
+        self._cancel_undo_separator_job()
+        self.undo_last_typing_kind = ""
+        self.undo_last_typing_at = 0.0
         try:
             self.text.edit_reset()
         except tk.TclError:
             pass
+
+    def _push_undo_separator(self) -> None:
+        try:
+            self.text.edit_separator()
+        except tk.TclError:
+            pass
+
+    def _schedule_undo_separator(self, delay_ms: int = UNDO_TYPING_IDLE_MS) -> None:
+        self._cancel_undo_separator_job()
+        self.undo_separator_job = self.after(delay_ms, self._idle_undo_separator)
+
+    def _cancel_undo_separator_job(self) -> None:
+        if not self.undo_separator_job:
+            return
+        try:
+            self.after_cancel(self.undo_separator_job)
+        except tk.TclError:
+            pass
+        self.undo_separator_job = None
+
+    def _idle_undo_separator(self) -> None:
+        self.undo_separator_job = None
+        self.end_undo_action()
+
+    def _undo_key_press(self, event=None):
+        if self.column_edit_active:
+            return None
+        if self._is_undo_shortcut_event(event):
+            return None
+        keysym = getattr(event, "keysym", "")
+        char = getattr(event, "char", "")
+        if keysym in {"BackSpace", "Delete", "Return", "KP_Enter", "Tab"}:
+            self.begin_undo_action()
+            self.after_idle(self.end_undo_action)
+            return None
+        if not char or char < " " or self._has_command_modifier(event):
+            return None
+        kind = self._typing_undo_kind(char)
+        now = time.monotonic()
+        continue_word = (
+            kind == "word"
+            and self.undo_last_typing_kind == "word"
+            and now - self.undo_last_typing_at <= UNDO_TYPING_IDLE_MS / 1000
+        )
+        if not continue_word:
+            self.begin_undo_action()
+        self.undo_last_typing_kind = kind
+        self.undo_last_typing_at = now
+        if kind == "word":
+            self._schedule_undo_separator()
+        else:
+            self.after_idle(self.end_undo_action)
+        return None
+
+    def _paste_undo_boundary(self, _event=None):
+        self.begin_undo_action()
+        self.after_idle(self.end_undo_action)
+        return None
+
+    def _cut_undo_boundary(self, _event=None):
+        self.begin_undo_action()
+        self.after_idle(self.end_undo_action)
+        return None
+
+    def _typing_undo_kind(self, char: str) -> str:
+        if char.isspace():
+            return "space"
+        if char.isalnum() or char in "_$":
+            return "word"
+        return "punctuation"
+
+    def _has_command_modifier(self, event=None) -> bool:
+        state = int(getattr(event, "state", 0) or 0)
+        if state & CONTROL_MASK:
+            return True
+        return is_macos() and any(state & mask for mask in MAC_COMMAND_MASKS)
+
+    def _is_undo_shortcut_event(self, event=None) -> bool:
+        keysym = str(getattr(event, "keysym", "")).lower()
+        if keysym not in {"z", "y"}:
+            return False
+        return self._has_command_modifier(event)
 
     def cancel_bulk_operation(self) -> None:
         self.bulk_cancel_token += 1
@@ -799,26 +900,32 @@ class LineNumberText(tk.Frame):
         return None
 
     def _column_edit_insert(self, value: str) -> None:
+        self.begin_undo_action()
         for line_no in reversed(self.column_edit_lines):
             index = self._padded_column_index(line_no, self.column_edit_column)
             self.text.insert(index, value)
+        self.end_undo_action()
         self.column_edit_column += len(value)
         self._refresh_column_edit_after_edit()
 
     def _column_edit_backspace(self) -> None:
         if self.column_edit_column <= 0:
             return
+        self.begin_undo_action()
         target_col = self.column_edit_column - 1
         for line_no in reversed(self.column_edit_lines):
             if self._line_length(line_no) >= self.column_edit_column:
                 self.text.delete(f"{line_no}.{target_col}", f"{line_no}.{self.column_edit_column}")
+        self.end_undo_action()
         self.column_edit_column = target_col
         self._refresh_column_edit_after_edit()
 
     def _column_edit_delete(self) -> None:
+        self.begin_undo_action()
         for line_no in reversed(self.column_edit_lines):
             if self._line_length(line_no) > self.column_edit_column:
                 self.text.delete(f"{line_no}.{self.column_edit_column}", f"{line_no}.{self.column_edit_column + 1}")
+        self.end_undo_action()
         self._refresh_column_edit_after_edit()
 
     def _refresh_column_edit_after_edit(self) -> None:
