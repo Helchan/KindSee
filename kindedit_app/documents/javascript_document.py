@@ -7,8 +7,14 @@ from .base import EmptyPositionIndex, ParseResult, TreeNode
 
 
 MAX_JAVASCRIPT_CHECK_CHARS = 500_000
-JAVASCRIPT_CONTENT_RE = re.compile(
-    r"\b(?:function|const|let|var|class|export|import)\b|=>|\bconsole\.(?:log|error|warn)\s*\(",
+JAVASCRIPT_STRONG_CONTENT_RE = re.compile(
+    r"\b(?:function|const|let|var|export)\b|=>|\bconsole\.(?:log|error|warn)\s*\("
+    r"|^\s*import\s+(?:[\w*{}\s,]+?\s+from\s+)?['\"][^'\"]+['\"]\s*;?",
+    re.MULTILINE,
+)
+JAVASCRIPT_WEAK_CONTENT_RE = re.compile(
+    r"\bclass\s+[A-Za-z_$][A-Za-z0-9_$]*|^\s*import\s+[A-Za-z_$][A-Za-z0-9_$]*",
+    re.MULTILINE,
 )
 
 
@@ -27,10 +33,17 @@ class JavaScriptDocumentType:
         return path.suffix.lower() in (".js", ".mjs", ".cjs")
 
     def matches_content(self, text: str) -> bool:
+        return self.content_score(text) > 0
+
+    def content_score(self, text: str) -> int:
         stripped = text.strip()
         if not stripped or len(stripped) > MAX_JAVASCRIPT_CHECK_CHARS:
-            return False
-        return bool(JAVASCRIPT_CONTENT_RE.search(stripped))
+            return 0
+        if JAVASCRIPT_STRONG_CONTENT_RE.search(stripped):
+            return 84
+        if JAVASCRIPT_WEAK_CONTENT_RE.search(stripped):
+            return 64
+        return 0
 
     def parse(self, text: str) -> ParseResult:
         if not text.strip():

@@ -30,10 +30,19 @@ class PythonDocumentType:
         return path.suffix.lower() in (".py", ".pyw")
 
     def matches_content(self, text: str) -> bool:
+        return self.content_score(text) > 0
+
+    def content_score(self, text: str) -> int:
         stripped = text.strip()
         if not stripped or len(stripped) > MAX_PYTHON_CHECK_CHARS:
-            return False
-        return bool(PYTHON_CONTENT_RE.search(stripped))
+            return 0
+        if not PYTHON_CONTENT_RE.search(stripped):
+            return 0
+        try:
+            ast.parse(stripped)
+        except SyntaxError:
+            return 0
+        return 85
 
     def parse(self, text: str) -> ParseResult:
         if not text.strip():

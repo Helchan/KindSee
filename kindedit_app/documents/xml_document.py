@@ -140,14 +140,17 @@ class XmlDocumentType:
         return path.suffix.lower() == ".xml"
 
     def matches_content(self, text: str) -> bool:
+        return self.content_score(text) > 0
+
+    def content_score(self, text: str) -> int:
         stripped = text.strip()
         if not stripped or not stripped.startswith("<"):
-            return False
+            return 0
         try:
             ET.fromstring(stripped)
         except ET.ParseError:
-            return False
-        return True
+            return 0
+        return 100
 
     def parse(self, text: str) -> ParseResult:
         if not text.strip():

@@ -62,6 +62,9 @@ class DocumentType(Protocol):
     def matches_path(self, path: Path) -> bool:
         ...
 
+    def content_score(self, text: str) -> int:
+        ...
+
     def parse(self, text: str) -> ParseResult:
         ...
 
@@ -129,10 +132,22 @@ class DocumentRegistry:
         return self.get(None)
 
     def detect_content(self, text: str, fallback_type_id: str = "text") -> DocumentType:
+        best_type: DocumentType | None = None
+        best_score = 0
         for doc_type in self._types.values():
+            scorer = getattr(doc_type, "content_score", None)
+            if callable(scorer):
+                score = scorer(text)
+                if score > best_score:
+                    best_type = doc_type
+                    best_score = score
+                continue
             matcher = getattr(doc_type, "matches_content", None)
-            if callable(matcher) and matcher(text):
-                return doc_type
+            if callable(matcher) and matcher(text) and best_score < 50:
+                best_type = doc_type
+                best_score = 50
+        if best_type is not None:
+            return best_type
         return self.get(fallback_type_id)
 
     def filetypes(self) -> list[tuple[str, str]]:

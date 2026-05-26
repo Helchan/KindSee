@@ -212,14 +212,17 @@ class JsonDocumentType:
         return path.suffix.lower() == ".json"
 
     def matches_content(self, text: str) -> bool:
+        return self.content_score(text) > 0
+
+    def content_score(self, text: str) -> int:
         stripped = text.strip()
         if not stripped or stripped[0] not in "{[":
-            return False
+            return 0
         try:
             json.loads(stripped)
         except json.JSONDecodeError:
-            return False
-        return True
+            return 0
+        return 100
 
     def parse(self, text: str) -> ParseResult:
         if not text.strip():

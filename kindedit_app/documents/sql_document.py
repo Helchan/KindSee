@@ -24,6 +24,10 @@ SQL_CONTENT_RE = re.compile(
     r".*\b(?:from|into|set|table|view|database|values|as)\b",
     re.IGNORECASE | re.DOTALL,
 )
+SQL_SIMPLE_STATEMENT_RE = re.compile(
+    r"^\s*(?:select\b.+|show\s+\w+|describe\s+\w+|explain\b.+)\s*;?\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
 NUMBER_LITERAL_RE = re.compile(r"(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
 LINE_BREAK_BEFORE = {"from", "where", "group", "having", "order", "limit", "union", "join", "left", "right", "inner", "outer", "set", "values"}
 CLAUSE_KEYWORDS = {"from", "where", "group", "having", "order", "limit", "union", "join", "left", "right", "inner", "outer", "set", "values"}
@@ -91,10 +95,17 @@ class SqlDocumentType:
         return path.suffix.lower() == ".sql"
 
     def matches_content(self, text: str) -> bool:
+        return self.content_score(text) > 0
+
+    def content_score(self, text: str) -> int:
         stripped = text.strip()
         if not stripped or len(stripped) > MAX_SQL_CHECK_CHARS:
-            return False
-        return bool(SQL_CONTENT_RE.search(stripped))
+            return 0
+        if SQL_CONTENT_RE.search(stripped):
+            return 83
+        if SQL_SIMPLE_STATEMENT_RE.search(stripped):
+            return 78
+        return 0
 
     def parse(self, text: str) -> ParseResult:
         if not text.strip():

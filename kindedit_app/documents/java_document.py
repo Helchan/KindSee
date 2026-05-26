@@ -7,7 +7,12 @@ from .base import EmptyPositionIndex, ParseResult, TreeNode
 
 
 MAX_JAVA_CHECK_CHARS = 500_000
-JAVA_CONTENT_RE = re.compile(r"\b(?:class|interface|enum|record)\s+[A-Za-z_$][A-Za-z0-9_$]*|\b(?:package|import)\s+[A-Za-z_$][A-Za-z0-9_$.]*\s*;")
+JAVA_STRONG_CONTENT_RE = re.compile(
+    r"\b(?:package|import)\s+[A-Za-z_$][A-Za-z0-9_$.]*\s*;"
+    r"|\b(?:public|private|protected)\s+(?:final\s+)?(?:class|interface|enum|record)\s+[A-Za-z_$][A-Za-z0-9_$]*"
+    r"|\bpublic\s+static\s+void\s+main\s*\(",
+)
+JAVA_WEAK_CONTENT_RE = re.compile(r"\b(?:class|interface|enum|record)\s+[A-Za-z_$][A-Za-z0-9_$]*")
 
 
 class JavaDocumentType:
@@ -25,10 +30,17 @@ class JavaDocumentType:
         return path.suffix.lower() == ".java"
 
     def matches_content(self, text: str) -> bool:
+        return self.content_score(text) > 0
+
+    def content_score(self, text: str) -> int:
         stripped = text.strip()
         if not stripped or len(stripped) > MAX_JAVA_CHECK_CHARS:
-            return False
-        return bool(JAVA_CONTENT_RE.search(stripped))
+            return 0
+        if JAVA_STRONG_CONTENT_RE.search(stripped):
+            return 82
+        if JAVA_WEAK_CONTENT_RE.search(stripped) and ";" in stripped:
+            return 62
+        return 0
 
     def parse(self, text: str) -> ParseResult:
         if not text.strip():
