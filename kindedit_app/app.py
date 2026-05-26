@@ -109,8 +109,7 @@ class KindEditApp:
         self.tab_bar.grid(row=1, column=0, sticky="ew")
         self.tab_bar.bind("<Configure>", lambda _e: self.draw_tabs())
         self.tab_bar.bind("<Button-1>", self._tab_click)
-        self.tab_bar.bind("<Button-3>", self._tab_context_click)
-        self.tab_bar.bind("<Control-Button-1>", self._tab_context_click)
+        self._bind_tab_context_events()
         self.tab_bar.bind("<Motion>", self._tab_motion)
         self.tab_bar.bind("<Leave>", self._tab_leave)
         self.paned = tk.PanedWindow(self.root, orient="horizontal", sashwidth=6, bd=0, showhandle=False)
@@ -814,6 +813,10 @@ class KindEditApp:
                 elif action == "new":
                     self.new_tab()
                 return
+
+    def _bind_tab_context_events(self) -> None:
+        for sequence in ("<Button-2>", "<Button-3>", "<Control-Button-1>"):
+            self.tab_bar.bind(sequence, self._tab_context_click)
 
     def _tab_context_click(self, event) -> str | None:
         self._hide_tab_tooltip()
