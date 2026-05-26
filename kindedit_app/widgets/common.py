@@ -34,6 +34,12 @@ OCCURRENCE_MODIFIER_KEYSYMS = {
     "Super_R",
 }
 WHEEL_SCROLL_UNITS = 6
+MACOS_COLUMN_EDIT_START_EVENTS = ("<Option-Button-1>", "<Alt-Button-1>", "<Mod1-Button-1>", "<Mod2-Button-1>")
+DEFAULT_COLUMN_EDIT_START_EVENTS = ("<Alt-Button-1>",)
+
+
+def column_edit_start_events(mac: bool) -> tuple[str, ...]:
+    return MACOS_COLUMN_EDIT_START_EVENTS if mac else DEFAULT_COLUMN_EDIT_START_EVENTS
 
 
 class SlimScrollbar(tk.Canvas):
@@ -275,8 +281,7 @@ class LineNumberText(tk.Frame):
         self.text.bind("<KeyRelease>", self._key_release)
         self.text.bind("<ButtonRelease-1>", self._button_release)
         self.text.bind("<Button-1>", self._button_press, add="+")
-        for sequence in ("<Alt-Button-1>", "<Option-Button-1>", "<Mod1-Button-1>", "<Mod2-Button-1>"):
-            self.text.bind(sequence, lambda event: self._column_edit_start(event, force=True))
+        self._bind_column_edit_start_events()
         self.text.bind("<B1-Motion>", self._column_edit_motion, add="+")
         self.text.bind("<ButtonRelease-1>", self._column_edit_release, add="+")
         self.text.bind("<KeyPress>", self._column_edit_key, add="+")
@@ -648,6 +653,10 @@ class LineNumberText(tk.Frame):
     def _button_press(self, event=None) -> None:
         self.clear_column_edit()
         return None
+
+    def _bind_column_edit_start_events(self) -> None:
+        for sequence in column_edit_start_events(is_macos()):
+            self.text.bind(sequence, lambda event: self._column_edit_start(event, force=True))
 
     def _column_edit_start(self, event, force: bool = False):
         if not force and not self._is_column_edit_event(event):
