@@ -970,16 +970,18 @@ class LineNumberText(tk.Frame):
             self.column_caret_widgets.append(caret)
 
     def _column_caret_geometry(self, line_no: int, column: int) -> tuple[int, int, int] | None:
-        index = f"{line_no}.{column}"
-        bbox = self.text.bbox(index)
-        if bbox:
-            return bbox[0], bbox[1], bbox[3]
         line_info = self.text.dlineinfo(f"{line_no}.0")
         if not line_info:
             return None
         x, y, _w, height, _baseline = line_info
-        text = self.text.get(f"{line_no}.0", f"{line_no}.{column}")
-        return x + self.text_font.measure(text), y, height
+        line_length = self._line_length(line_no)
+        if column <= line_length:
+            bbox = self.text.bbox(f"{line_no}.{column}")
+            if bbox:
+                return bbox[0], bbox[1], bbox[3]
+        text = self.text.get(f"{line_no}.0", f"{line_no}.end")
+        missing_columns = max(0, column - line_length)
+        return x + self.text_font.measure(text) + self.text_font.measure(" " * missing_columns), y, height
 
     def _padded_column_index(self, line_no: int, column: int) -> str:
         line_length = self._line_length(line_no)
